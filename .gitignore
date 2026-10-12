@@ -30,3 +30,4 @@ node_modules/
 dist/
 build/
 coverage/
+/public/video.mp4
