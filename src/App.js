@@ -21,6 +21,9 @@ import AdminLayout from './components/admin/AdminLayout'
 
 function Shell() {
   const [authOpen, setAuthOpen] = useState(false)
+  const [bookingIntent, setBookingIntent] = useState(null)
+  const clearBookingIntent = () => setBookingIntent(null)
+  const continueBooking = (selection) => { setBookingIntent(selection); setAuthOpen(true) }
   const { user: guestUser, signIn: guestSignIn, signUp: guestSignUp } = useAccount()
   const { user: staffUser, login: staffLogin, logout: staffLogout } = useAdmin()
 
@@ -34,13 +37,13 @@ function Shell() {
 
   // ---- Signed in as guest → account dashboard ----
   if (guestUser) {
-    return <AccountPage />
+    return <AccountPage bookingIntent={bookingIntent} clearBookingIntent={clearBookingIntent} />
   }
 
   // ---- Not signed in → public site ----
   // Try staff login first, then guest login
   const handleSignIn = (email, password) => {
-    if (staffLogin(email, password)?.ok) return { ok: true, role: 'staff' }
+    if (staffLogin(email, password)?.ok) { clearBookingIntent(); return { ok: true, role: 'staff' } }
     if (guestSignIn(email, password)) return { ok: true, role: 'guest' }
     return { error: 'Incorrect email or password.' }
   }
@@ -61,7 +64,7 @@ function Shell() {
     >
       <Header />
       <Hero />
-      <BookingForm />
+      <BookingForm onBook={continueBooking} />
       <About />
       <Rooms />
       <Facilities />
@@ -76,10 +79,10 @@ function Shell() {
 
 export default function App() {
   return (
-    <AccountProvider>
-      <AdminProvider>
+    <AdminProvider>
+      <AccountProvider>
         <Shell />
-      </AdminProvider>
-    </AccountProvider>
+      </AccountProvider>
+    </AdminProvider>
   )
 }

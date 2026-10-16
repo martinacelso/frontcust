@@ -16,6 +16,11 @@ const transformJsxInJs = () => ({
 });
 
 export default defineConfig({
+  optimizeDeps: {
+    rolldownOptions: {
+      moduleTypes: { ".js": "jsx" },
+    },
+  },
   plugins: [
     transformJsxInJs(), // Must be before react()
     react(),

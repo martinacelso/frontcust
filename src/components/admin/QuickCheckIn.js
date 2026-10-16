@@ -1,11 +1,15 @@
+import { stayError } from '../../utils/validation'
+import { checkInError, checkInBookingError } from '../../utils/actionValidation'
 import { useState } from 'react'
 import { useAdmin, T, P } from '../../context/AdminContext'
 
 export default function QuickCheckIn() {
   const {
-    bookings, rooms, types, setBookings, setRooms,
-    by, total, paid, free, logAction,
+    bookings, rooms,
+    by, balanceDue, free, getRoomType, checkIn, checkOut: commitCheckOut,
   } = useAdmin()
+
+  const { can } = useAdmin()
 
   const [checkInModal, setCheckInModal] = useState(null) // { bookingId, roomId }
   const [search, setSearch] = useState('')
@@ -20,61 +24,33 @@ export default function QuickCheckIn() {
   // In-house: currently checked-in
   const inHouse = bookings.filter((b) => b.st === 'checked-in')
 
-  function rateOf(typeName) {
-    return (types.filter((t) => t.n === typeName)[0] || { r: 0 }).r
-  }
-
   function openCheckIn(bookingId) {
+    if (!can('chk')) return window.alert('You do not have permission to check in guests.')
     setCheckInModal({ bookingId, roomId: 0 })
   }
 
   function confirmCheckIn() {
+    if (!can('chk')) return window.alert('You do not have permission to check in guests.')
+    if (!checkInModal) return
     const b = by('bookings', checkInModal.bookingId)
     const r = by('rooms', checkInModal.roomId)
-    if (!b || !r) return
+    const error = checkInError(b, r, bookings)
+    if (error) return window.alert(error)
+    if (!by('guests', b.g)) return window.alert('The guest record is missing.')
+    if (!window.confirm(`Check in reservation #${b.id} to room ${r.no}?`)) return
 
-    logAction(
-      'Checked in',
-      `Booking #${b.id}`,
-      `${by('guests', b.g)?.name} → Room ${r.no}`
-    )
-
-    setBookings((prev) =>
-      prev.map((x) =>
-        x.id === b.id
-          ? { ...x, room: r.id, type: r.type, rate: rateOf(r.type), st: 'checked-in' }
-          : x
-      )
-    )
-    setRooms((prev) =>
-      prev.map((x) => (x.id === r.id ? { ...x, status: 'occupied' } : x))
-    )
+    const result = checkIn(b.id, r.id)
+    if (result.error) return window.alert(result.error)
     setCheckInModal(null)
   }
 
   function checkOut(bookingId) {
+    if (!can('chk')) return window.alert('You do not have permission to check out guests.')
     const b = by('bookings', bookingId)
-    if (!b) return
-    const balance = total(b) - paid(b)
-    if (balance > 0) {
-      window.alert(`Outstanding balance of ${P(balance)}. Record payment first.`)
-      return
-    }
-
-    logAction(
-      'Checked out',
-      `Booking #${b.id}`,
-      `Room ${by('rooms', b.room)?.no || '—'}`
-    )
-
-    setBookings((prev) =>
-      prev.map((x) => (x.id === b.id ? { ...x, st: 'checked-out' } : x))
-    )
-    if (b.room) {
-      setRooms((prev) =>
-        prev.map((x) => (x.id === b.room ? { ...x, status: 'dirty' } : x))
-      )
-    }
+    if (!b) return window.alert('This reservation no longer exists.')
+    if (!window.confirm(`Check out reservation #${b.id} and mark its room for cleaning?`)) return
+    const result = commitCheckOut(b.id)
+    if (result.error) window.alert(result.error)
   }
 
   // ---------- Modal data ----------
@@ -82,10 +58,12 @@ export default function QuickCheckIn() {
     ? by('bookings', checkInModal.bookingId)
     : null
 
-  const assignableRooms = bookingBeingCheckedIn
+  const checkInBlocked = bookingBeingCheckedIn ? checkInBookingError(bookingBeingCheckedIn) || stayError({ ...bookingBeingCheckedIn, adults: bookingBeingCheckedIn.adults ?? bookingBeingCheckedIn.gCount ?? 2, children: bookingBeingCheckedIn.children ?? 0 }, { allowPast: true, capacity: getRoomType(bookingBeingCheckedIn.type)?.s }) : ''
+
+  const assignableRooms = bookingBeingCheckedIn && !checkInBlocked
     ? rooms.filter(
         (r) =>
-          r.status === 'available' &&
+          !checkInError(bookingBeingCheckedIn, r, bookings) &&
           free(
             r,
             bookingBeingCheckedIn.in,
@@ -160,7 +138,7 @@ export default function QuickCheckIn() {
             inHouseFiltered.map((b) => {
               const guest = by('guests', b.g)
               const room = by('rooms', b.room)
-              const balance = total(b) - paid(b)
+              const balance = balanceDue(b)
               return (
                 <div className="quick-card" key={b.id}>
                   <div>
@@ -204,7 +182,7 @@ export default function QuickCheckIn() {
               {bookingBeingCheckedIn.in} → {bookingBeingCheckedIn.out}
             </p>
 
-            {assignableRooms.length === 0 ? (
+            {checkInBlocked ? (<p className="acc-error" role="alert">{checkInBlocked}</p>) : assignableRooms.length === 0 ? (
               <p className="acc-error">No clean, available rooms for these dates.</p>
             ) : (
               <>
@@ -232,13 +210,12 @@ export default function QuickCheckIn() {
               >
                 Cancel
               </button>
-              <button
-                className="btn"
-                onClick={confirmCheckIn}
-                disabled={!checkInModal.roomId}
-              >
-                Check in guest
-              </button>
+              {can('chk') && by('guests', bookingBeingCheckedIn.g) &&
+                assignableRooms.some((r) => r.id === checkInModal.roomId) && (
+                <button className="btn" onClick={confirmCheckIn}>
+                  Check in guest
+                </button>
+              )}
             </div>
           </div>
         </div>

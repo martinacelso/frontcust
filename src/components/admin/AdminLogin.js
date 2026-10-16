@@ -43,14 +43,7 @@ export default function AdminLogin() {
 
         <button type="submit" className="admin-login-btn">Sign in</button>
 
-        <div className="admin-login-hint">
-          <b>Demo logins</b>
-          <ul>
-            <li><span>admin@twinlakes.ph</span> / admin123 <em>(Admin)</em></li>
-            <li><span>desk@twinlakes.ph</span> / desk123 <em>(Front Desk)</em></li>
-            <li><span>hk@twinlakes.ph</span> / hk123 <em>(Housekeeping)</em></li>
-          </ul>
-        </div>
+
       </form>
     </div>
   )

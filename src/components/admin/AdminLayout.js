@@ -23,6 +23,7 @@ export default function AdminLayout() {
   const visible = MODS.filter(([id]) => can(id))
 
   function renderModule() {
+    if (!can(tab)) return <p className="admin-muted">You do not have access to this section. Choose a section from the menu.</p>
     switch (tab) {
       case 'dash': return <Dashboard />
       case 'rooms': return <RoomsModule />

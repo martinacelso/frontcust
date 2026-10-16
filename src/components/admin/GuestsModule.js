@@ -1,3 +1,4 @@
+import { guestError } from '../../utils/validation'
 import { useState } from 'react'
 import { useAdmin, P } from '../../context/AdminContext'
 
@@ -5,7 +6,7 @@ const ID_TYPES = ['Passport', 'Driver’s License', 'National ID', 'SSS/UMID', '
 
 export default function GuestsModule() {
   const {
-    guests, bookings, setGuests, by, total, nextId, logAction,
+    guests, bookings, setGuests, by, total, nextId, logAction, can,
   } = useAdmin()
 
   const [search, setSearch] = useState('')
@@ -47,6 +48,9 @@ export default function GuestsModule() {
   }
 
   function saveEdit() {
+    if (!can('guests')) return window.alert('You do not have permission to edit guests.')
+    const error = guestError(editModal)
+    if (error) return window.alert(error)
     if (!editModal.firstName.trim()) return window.alert('First name is required.')
     if (!editModal.lastName.trim()) return window.alert('Last name is required.')
     if (!editModal.phone.trim()) return window.alert('Phone is required.')
@@ -57,7 +61,7 @@ export default function GuestsModule() {
     const fullName = `${editModal.firstName.trim()} ${editModal.lastName.trim()}`
 
     if (editModal.id) {
-      logAction('Edited guest', fullName, `${editModal.idType} · ${editModal.idNumber}`)
+      logAction('Edited guest', fullName, 'Guest contact details updated')
       setGuests((prev) =>
         prev.map((g) =>
           g.id === editModal.id
@@ -73,7 +77,7 @@ export default function GuestsModule() {
         )
       )
     } else {
-      logAction('Registered guest', fullName, `${editModal.idType} · ${editModal.idNumber}`)
+      logAction('Registered guest', fullName, 'Guest contact details updated')
       setGuests((prev) => [
         ...prev,
         {
@@ -188,7 +192,7 @@ export default function GuestsModule() {
                 />
               </div>
               <div>
-                <label>Email *</label>
+                <label>Contact email *</label>
                 <input
                   type="email"
                   value={editModal.email}
@@ -197,6 +201,7 @@ export default function GuestsModule() {
               </div>
             </div>
 
+            <p className="acc-muted acc-small">This is the reservation contact email. Editing it does not change an online account’s login email or ownership.</p>
             <div className="form-section-title">Identification</div>
             <div className="form-grid">
               <div>

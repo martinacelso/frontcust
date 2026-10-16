@@ -1,72 +1,21 @@
+import { PROMOTIONS as DASHBOARD_PROMOS, promotionError } from '../../utils/promotions'
+import { hotelDate } from '../../utils/hotel'
+import { stayError } from '../../utils/validation'
 import { useState } from 'react'
-import { useAccount, nights, P, TYPES, sd, T } from '../../context/AccountContext'
+import { useAccount, nights, P, sd, T } from '../../context/AccountContext'
 import TripCard from './TripCard'
 import BookingModal from './BookingModal'
 
 // ---- Dashboard-only promos ----
-const DASHBOARD_PROMOS = [
-  {
-    id: 'long-stay',
-    badge: 'SAVE 15%',
-    title: 'Long Stay Discount',
-    description:
-      'Book 3 nights or more and save 15% on your room rate. Perfect for slow weekends and extended getaways.',
-    valid: 'Valid for stays of 3+ nights',
-    image: '/promo-1.jpg',
-    discount: { type: 'percent', value: 15 },
-    rule: { minNights: 3 },
-    terms: [
-      'Minimum 3 consecutive nights required.',
-      'Discount applies to room rate only.',
-      'Subject to availability at time of booking.',
-      'Cannot be combined with other promotions.',
-      'Not valid during peak season (Dec 20 – Jan 5).',
-    ],
-  },
-  {
-    id: 'weekday',
-    badge: 'FREE UPGRADE',
-    title: 'Weekday Escape',
-    description:
-      'Stay Sunday through Thursday and enjoy a complimentary room upgrade, subject to availability.',
-    valid: 'Sun–Thu arrivals only',
-    image: '/promo-2.jpg',
-    discount: { type: 'upgrade', value: 0 },
-    rule: { weekdaysOnly: [0, 1, 2, 3, 4] }, // Sun=0 ... Thu=4
-    terms: [
-      'Valid for check-ins on Sunday, Monday, Tuesday, or Wednesday.',
-      'Free upgrade is one category higher, subject to availability at check-in.',
-      'Not valid for suite categories.',
-      'Standard cancellation policy applies.',
-    ],
-  },
-  {
-    id: 'direct',
-    badge: 'SAVE ₱2,000',
-    title: 'Direct Booking Bonus',
-    description:
-      'Book directly with us and get ₱2,000 off your total. No code needed — just book from your account.',
-    valid: 'Minimum 2-night stay',
-    image: '/promo-3.jpg',
-    discount: { type: 'fixed', value: 2000 },
-    rule: { minNights: 2 },
-    terms: [
-      'Minimum 2-night stay required.',
-      'Discount applied automatically when booking from your account.',
-      'One discount per booking.',
-      'Non-transferable and non-refundable.',
-      'Offer valid until December 31, 2026.',
-    ],
-  },
-]
+
 
 export default function HomeTab({ onNavigate }) {
-  const { user, myBookings, cancelBooking, setPromo } = useAccount()
+  const { user, myBookings, cancelBooking, setPromo, TYPES } = useAccount()
   const [modal, setModal] = useState(null)
   const [promoModal, setPromoModal] = useState(null)
 
   const mine = myBookings()
-  const today = new Date().toISOString().slice(0, 10)
+  const today = hotelDate()
   const isUpcoming = (b) =>
     b.st !== 'cancelled' && b.out >= today && b.st !== 'checked-out'
 
@@ -77,7 +26,7 @@ export default function HomeTab({ onNavigate }) {
 
   const totalNights = past.reduce((s, b) => s + nights(b.in, b.out), 0)
   const totalSpent = past.reduce(
-    (s, b) => s + nights(b.in, b.out) * TYPES.find((t) => t.n === b.type).r,
+    (s, b) => s + b.paid,
     0
   )
 
@@ -103,7 +52,8 @@ export default function HomeTab({ onNavigate }) {
     onNavigate('book')
   }
 
-  const todayLabel = new Date().toLocaleDateString('en-US', {
+  const todayLabel = new Date(today + 'T00:00:00Z').toLocaleDateString('en-US', {
+    timeZone: 'UTC',
     weekday: 'long',
     month: 'long',
     day: 'numeric',
@@ -141,11 +91,11 @@ export default function HomeTab({ onNavigate }) {
       <h2 className="acc-section-title">Next stay</h2>
       {next ? (
         <div className="acc-next-stay">
-          <div className="acc-next-photo" style={{ backgroundImage: `url(${room.img})` }} />
+          <div className="acc-next-photo" style={{ backgroundImage: `url(${room?.img || '/room-1.jpg'})` }} />
           <div className="acc-next-info">
             <div className="acc-next-header">
               <h3>{next.type}</h3>
-              <span className={`acc-badge ${next.st}`}>Confirmed</span>
+              <span className={`acc-badge ${next.st}`}>{next.st === 'checked-in' ? 'Checked in' : 'Confirmed'}</span>
             </div>
             <div className="acc-next-meta">
               <div><span className="acc-meta-label">Check-in</span><b>{next.in}</b></div>
@@ -155,7 +105,7 @@ export default function HomeTab({ onNavigate }) {
             </div>
             <div className="acc-next-footer">
               <div><span className="acc-meta-label">Reference</span><b>{next.id}</b></div>
-              <div><span className="acc-meta-label">Total</span><span className="acc-price">{P(nights(next.in, next.out) * room.r)}</span></div>
+              <div><span className="acc-meta-label">Total</span><span className="acc-price">{P(next.total)}</span></div>
             </div>
             <div className="acc-trip-actions">
               <button className="btn ghost-dark" onClick={() => handleViewDetails(next.id)}>View details</button>
@@ -230,6 +180,10 @@ function PromoModal({ promo, onClose, onConfirm }) {
   const [alert, setAlert] = useState(null) // { title, message }
 
   function validate() {
+    const promoError = promotionError(promo.id, checkIn, checkOut)
+    if (promoError) return { title: 'Promotion not applicable', message: promoError }
+    const error = stayError({ in: checkIn, out: checkOut, adults, children })
+    if (error) return { title: 'Check your reservation', message: error }
     const nightsCount = nights(checkIn, checkOut)
 
     if (checkIn >= checkOut) {
@@ -252,7 +206,7 @@ function PromoModal({ promo, onClose, onConfirm }) {
     }
 
     if (r.weekdaysOnly) {
-      const day = new Date(checkIn).getDay()
+      const day = new Date(checkIn + 'T00:00:00Z').getUTCDay()
       if (!r.weekdaysOnly.includes(day)) {
         return {
           title: 'Promo not applicable',

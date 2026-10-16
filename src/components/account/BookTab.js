@@ -1,76 +1,51 @@
-import { useState, useEffect } from 'react'
+import { quoteStay } from '../../utils/promotions'
+import { addDays } from '../../utils/hotel'
+import { stayError } from '../../utils/validation'
+import { useState } from 'react'
 import {
   useAccount,
   sd,
   T,
   nights,
   P,
-  TYPES,
+  downPayment,
 } from '../../context/AccountContext'
 import BookingModal from './BookingModal'
 
-export default function BookTab() {
-  const { bookings, addBooking, promo, setPromo } = useAccount()
+export default function BookTab({ initialSearch = null, onBooked = () => {} }) {
+  const { TYPES, roomsAvailable, addBooking, promo, setPromo } = useAccount()
 
-  const [checkIn, setCheckIn] = useState(sd(1))
-  const [checkOut, setCheckOut] = useState(sd(2))
-  const [adults, setAdults] = useState(2)
-  const [children, setChildren] = useState(0)
-  const [form, setForm] = useState({ in: sd(1), out: sd(2), a: 2, c: 0 })
+  const [checkIn, setCheckIn] = useState(promo?.in || initialSearch?.in || sd(1))
+  const [checkOut, setCheckOut] = useState(promo?.out || initialSearch?.out || sd(2))
+  const [adults, setAdults] = useState(promo?.a ?? initialSearch?.adults ?? 2)
+  const [children, setChildren] = useState(promo?.c ?? initialSearch?.children ?? 0)
   const [modal, setModal] = useState(null)
 
   const totalGuests = adults + children
 
-  // Pre-fill search when a promo arrives from the Home tab
-  useEffect(() => {
-    if (promo?.in && promo?.out) {
-      setCheckIn(promo.in)
-      setCheckOut(promo.out)
-      setAdults(promo.a ?? 2)
-      setChildren(promo.c ?? 0)
-      setForm({
-        in: promo.in,
-        out: promo.out,
-        a: promo.a ?? 2,
-        c: promo.c ?? 0,
-      })
-    }
-  }, [promo])
+  // Always the dates/guests currently shown in the search boxes, so prices and the
+  // Book now button can never use stale dates.
+  const form = { in: checkIn, out: checkOut, a: adults, c: children }
+  const datesValid = checkIn >= T() && checkIn < checkOut
 
-  function roomsAvailable(roomType, from, to) {
-    const overlapping = bookings.filter(
-      (b) =>
-        b.type === roomType.n &&
-        b.st !== 'cancelled' &&
-        b.in < to &&
-        b.out > from
-    ).length
-    return roomType.c - overlapping
+  // Keep check-out after check-in
+  function handleCheckIn(value) {
+    setCheckIn(value)
+    if (value && (!checkOut || checkOut <= value)) {
+      setCheckOut(addDays(value, 1))
+    }
   }
 
   // Apply the active promo to a raw total
-  function applyDiscount(total) {
-    if (!promo?.discount) return { total, label: null }
-    const d = promo.discount
-    if (d.type === 'percent') {
-      return {
-        total: Math.round(total * (1 - d.value / 100)),
-        label: `${d.value}% off applied`,
-      }
-    }
-    if (d.type === 'fixed') {
-      return {
-        total: Math.max(0, total - d.value),
-        label: `₱${d.value.toLocaleString()} off applied`,
-      }
-    }
-    if (d.type === 'upgrade') {
-      return { total, label: 'Free upgrade at check-in' }
-    }
-    return { total, label: null }
+  function applyDiscount(total, roomType) {
+    const quote = quoteStay(roomType, form.in, form.out, promo?.id)
+    if (quote.error) return { total, label: null, error: quote.error }
+    return { total: quote.total, label: quote.label }
   }
 
   function handleSearch() {
+    const error = stayError({ in: checkIn, out: checkOut, adults, children })
+    if (error) return window.alert(error)
     if (checkIn >= checkOut) {
       alert('Check-out must be after check-in.')
       return
@@ -79,29 +54,82 @@ export default function BookTab() {
       alert('At least 1 adult is required.')
       return
     }
-    setForm({ in: checkIn, out: checkOut, a: adults, c: children })
   }
 
+  // Step 1: open the checkout modal showing the down payment
   function handleBook(roomType) {
-    const created = addBooking({
-      type: roomType.n,
-      in: form.in,
-      out: form.out,
-      g: form.a + form.c,
-      note: '',
-      promoId: promo?.id || null,
+    const error = stayError({ in: checkIn, out: checkOut, adults, children }, { capacity: roomType.s })
+    if (error) return window.alert(error)
+    if (roomsAvailable(roomType.n, checkIn, checkOut) <= 0) return window.alert('No rooms available for these dates.')
+    if (!datesValid) {
+      alert('Please choose a check-in date (today or later) and a check-out date after it.')
+      return
+    }
+    const rawTotal = roomType.r * nights(form.in, form.out)
+    const quote = quoteStay(roomType, form.in, form.out, promo?.id)
+    if (quote.error) return window.alert(quote.error)
+    const { total, label } = quote
+    const proceed = window.confirm(
+      `Continue with this booking?\n\nRoom: ${roomType.n}\nCheck-in: ${form.in}\nCheck-out: ${form.out}\nGuests: ${form.a} adult(s), ${form.c} child(ren)\nTotal: ${P(total)}\nDown payment: ${P(downPayment(total))}\n\nSelect OK to continue to payment, or Cancel to go back.`
+    )
+    if (!proceed) return
+    setModal({
+      type: 'checkout',
+      label: 'Pay down payment',
+      checkout: {
+        room: roomType.n,
+        in: form.in,
+        out: form.out,
+        nights: nights(form.in, form.out),
+        rawTotal,
+        total,
+        discountLabel: label,
+      },
+      // Demo only: create the booking and its simulated down-payment record.
+      onConfirm: (method, payRef) => {
+        const created = addBooking({
+          type: roomType.n,
+          in: form.in,
+          out: form.out,
+          adults: form.a,
+          children: form.c,
+          note: '',
+          promoId: promo?.id || null,
+          quote,
+          paid: downPayment(total),
+          payMethod: method,
+          payRef,
+        })
+        if (created.error) return created
+        setModal({ type: 'confirmed', booking: created })
+        setPromo(null)
+        onBooked()
+        return false // keep the modal open to show the confirmation
+      },
     })
-    setModal({ type: 'confirmed', booking: created })
-    setPromo(null)
   }
+
+  const selectedRoom = !promo && initialSearch?.type ? TYPES.find((t) => t.n === initialSearch.type) : null
 
   const results = TYPES.filter(
-    (t) => t.s >= form.a + form.c && form.in < form.out && form.in >= T()
+    (t) => t.s >= form.a + form.c && datesValid
   )
 
   return (
     <>
       <h2 className="acc-section-title">Find your room</h2>
+
+      {initialSearch && !promo && (
+        <div className="acc-card" style={{ marginBottom: 20 }}>
+          <p>Your dates and guest count from the availability search are filled in below.</p>
+          {selectedRoom ? <>
+            <p>Selected room: <b>{selectedRoom.n}</b>. Review your dates and the current price before continuing.</p>
+            {datesValid && totalGuests <= selectedRoom.s && roomsAvailable(selectedRoom.n, checkIn, checkOut) > 0 ? (
+              <button className="btn" onClick={() => handleBook(selectedRoom)}>Continue with {selectedRoom.n}</button>
+            ) : <p className="acc-error" role="alert">Your selected room is unavailable for these dates or guest count. Please choose another option below.</p>}
+          </> : <p className="acc-error" role="alert">Your selected room type is no longer offered. Please choose another option below.</p>}
+        </div>
+      )}
 
       {promo && (
         <div className="promo-banner">
@@ -123,7 +151,7 @@ export default function BookTab() {
               type="date"
               min={T()}
               value={checkIn}
-              onChange={(e) => setCheckIn(e.target.value)}
+              onChange={(e) => handleCheckIn(e.target.value)}
             />
           </div>
           <div>
@@ -187,9 +215,13 @@ export default function BookTab() {
         </div>
       </div>
 
+      {!datesValid && (
+        <p className="acc-muted">Choose a check-in date (today or later) and a check-out date after it to see rooms.</p>
+      )}
+
       <div className="acc-room-grid">
         {results.map((t) => {
-          const available = roomsAvailable(t, form.in, form.out)
+          const available = roomsAvailable(t.n, form.in, form.out)
           const nightsCount = nights(form.in, form.out)
           const total = t.r * nightsCount
 
@@ -206,7 +238,7 @@ export default function BookTab() {
               <div className="acc-room-footer">
                 <div>
                   {(() => {
-                    const { total: finalTotal, label } = applyDiscount(total)
+                    const { total: finalTotal, label } = applyDiscount(total, t)
                     const hasDiscount = finalTotal !== total
                     return hasDiscount ? (
                       <>
@@ -232,10 +264,10 @@ export default function BookTab() {
                 </div>
                 {available > 0 ? (
                   <button className="btn" onClick={() => handleBook(t)}>
-                    Book
+                    Book now
                   </button>
                 ) : (
-                  <span className="acc-badge cancelled">Sold out</span>
+                  <span className="acc-badge cancelled">Unavailable</span>
                 )}
               </div>
             </div>

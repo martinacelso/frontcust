@@ -1,12 +1,25 @@
+import { allocationPlan, activeBooking } from '../../utils/inventory'
+import { hotelDate } from '../../utils/hotel'
+import { roomStatusError } from '../../utils/actionValidation'
 import { useState } from 'react'
 import { useAdmin } from '../../context/AdminContext'
 
 export default function HousekeepingModule() {
-  const { rooms, staff, setRooms, logAction } = useAdmin()
+  const { rooms, staff, bookings, can, setRooms, logAction } = useAdmin()
   const [assignModal, setAssignModal] = useState(null)
 
   function setStatus(id, status) {
+    if (!can('hk')) return window.alert('You do not have permission to change housekeeping status.')
     const r = rooms.find((x) => x.id === id)
+    const error = roomStatusError(r, status, bookings)
+    if (error) return window.alert(error)
+    if (r.status === status) return
+    if (status === 'maintenance') {
+      const proposed = rooms.map((x) => x.id === id ? { ...x, status } : x)
+      const affected = bookings.filter((b) => activeBooking(b) && b.type === r.type && (b.out > hotelDate() || b.st === 'checked-in'))
+      if (affected.some((b) => !allocationPlan(proposed, bookings, b, b.id))) return window.alert('This room is needed for an existing reservation. Reassign the reservation first.')
+    }
+    if (!window.confirm(`Change room ${r.no} from ${r.status} to ${status}?`)) return
     logAction('Room status', `Room ${r?.no}`, `→ ${status}`)
     setRooms((prev) =>
       prev.map((x) => (x.id === id ? { ...x, status } : x))
@@ -19,6 +32,9 @@ export default function HousekeepingModule() {
   }
 
   function saveAssign() {
+    if (!can('hk')) return window.alert('You do not have permission to assign cleaners.')
+    if (!assignModal || !rooms.some((r) => r.id === assignModal.roomId)) return window.alert('This room no longer exists.')
+    if (assignModal.hk && !cleaners.some((s) => s.name === assignModal.hk)) return window.alert('Choose an active housekeeping employee.')
     logAction(
       'Assigned cleaner',
       `Room ${rooms.find((x) => x.id === assignModal.roomId)?.no}`,

@@ -180,13 +180,13 @@ footer{padding:36px 0;font-size:14px;color:var(--mut);text-align:center}
 /* ============================================================
    FULL-SCREEN AUTH OVERLAY
    ============================================================ */
-.auth-overlay{position:fixed;inset:0;z-index:100;display:grid;grid-template-columns:1fr 1fr;background:#fff;animation:fadeIn .2s ease-out}
+.auth-overlay{position:fixed;inset:0;z-index:100;display:grid;grid-template-columns:1fr 1fr;background:var(--bg);animation:fadeIn .2s ease-out}
 .auth-left{
   position:relative;
   background:
-    linear-gradient(180deg, rgba(20,20,30,.25), rgba(20,20,30,.75)),
+    linear-gradient(180deg, rgba(55,20,28,.45), rgba(35,15,21,.88)),
     url('/hotel.jpg') center/cover no-repeat,
-    #1e3a5f;
+    var(--acc);
   color:#fff;
   padding:36px 48px;
   display:flex;
@@ -196,25 +196,25 @@ footer{padding:36px 0;font-size:14px;color:var(--mut);text-align:center}
 .auth-logo{font-family:Georgia,serif;font-size:16px;letter-spacing:.22em;color:#e7d8b4}
 .auth-welcome h1{font-family:Georgia,serif;font-size:clamp(32px,4vw,54px);line-height:1.05;font-weight:600;letter-spacing:.03em;margin:0 0 20px;text-shadow:0 2px 12px rgba(0,0,0,.55)}
 .auth-welcome p{font-size:16px;margin:0;opacity:.9;text-shadow:0 1px 8px rgba(0,0,0,.6)}
-.auth-right{position:relative;display:flex;align-items:center;justify-content:center;padding:60px 40px;overflow-y:auto}
-.auth-close{position:absolute;top:18px;right:22px;width:38px;height:38px;border:0;background:none;font-size:28px;line-height:1;color:#666;cursor:pointer;border-radius:50%;transition:background .15s,color .15s}
-.auth-close:hover{background:#f2ece0;color:#111}
+.auth-right{background:var(--bg);position:relative;display:flex;align-items:center;justify-content:center;padding:60px 40px;overflow-y:auto}
+.auth-close{position:absolute;top:18px;right:22px;width:38px;height:38px;border:0;background:none;font-size:28px;line-height:1;color:var(--mut);cursor:pointer;border-radius:50%;transition:background .15s,color .15s}
+.auth-close:hover{background:#eee3d5;color:var(--acc)}
 .auth-form-wrap{width:100%;max-width:420px}
-.auth-heading{font-family:Georgia,serif;font-size:32px;font-weight:700;color:#1e3a5f;letter-spacing:.04em;margin:0 0 10px}
+.auth-heading{font-family:Georgia,serif;font-size:32px;font-weight:700;color:var(--acc);letter-spacing:.04em;margin:0 0 10px}
 .auth-sub{color:#6d625a;font-size:15px;margin:0 0 32px}
 .auth-form{display:flex;flex-direction:column;gap:20px}
 .auth-field label{display:block;font-size:14px;color:#2a2420;font-weight:600;margin-bottom:8px}
-.auth-field input{width:100%;padding:12px 14px;border:1px solid #cfc7b7;background:#fff;color:#2a2420;font:inherit;border-radius:2px}
-.auth-field input:focus{outline:none;border-color:#1e3a5f;box-shadow:0 0 0 2px rgba(30,58,95,.12)}
+.auth-field input{width:100%;padding:12px 14px;border:1px solid #c5b7a6;background:#fff;color:#2a2420;font:inherit;border-radius:2px}
+.auth-field input:focus{outline:none;border-color:var(--acc);box-shadow:0 0 0 2px rgba(122,46,59,.16)}
 .auth-pass-wrap{position:relative}
 .auth-pass-wrap input{padding-right:70px}
-.auth-show{position:absolute;right:12px;top:50%;transform:translateY(-50%);border:0;background:none;color:#1e3a5f;font:inherit;font-size:13px;font-weight:600;letter-spacing:.05em;cursor:pointer;padding:6px 8px}
+.auth-show{position:absolute;right:12px;top:50%;transform:translateY(-50%);border:0;background:none;color:var(--acc);font:inherit;font-size:13px;font-weight:600;letter-spacing:.05em;cursor:pointer;padding:6px 8px}
 .auth-show:hover{text-decoration:underline}
 .auth-forgot-row{display:flex;justify-content:flex-end;margin-top:-8px}
-.auth-link{background:none;border:0;color:#1e3a5f;font:inherit;font-size:14px;font-weight:600;cursor:pointer;padding:0;text-decoration:underline;text-underline-offset:3px}
-.auth-link:hover{color:#b8924a}
-.auth-submit{margin-top:8px;padding:16px;border:0;background:#1e3a5f;color:#fff;font:inherit;font-size:14px;font-weight:700;letter-spacing:.14em;cursor:pointer;border-radius:2px;transition:background .15s}
-.auth-submit:hover{background:#15294a}
+.auth-link{background:none;border:0;color:var(--acc);font:inherit;font-size:14px;font-weight:600;cursor:pointer;padding:0;text-decoration:underline;text-underline-offset:3px}
+.auth-link:hover{color:#60232e}
+.auth-submit{margin-top:8px;padding:16px;border:0;background:var(--acc);color:#fff;font:inherit;font-size:14px;font-weight:700;letter-spacing:.14em;cursor:pointer;border-radius:2px;transition:background .15s}
+.auth-submit:hover{background:#60232e}
 .auth-msg{font-size:13px;color:#7a2e3b;text-align:center;margin:6px 0 0}
 .auth-switch{text-align:center;font-size:14px;color:#6d625a;margin:32px 0 0}
 .auth-name-row{display:grid;grid-template-columns:1fr 1fr;gap:14px}
@@ -226,6 +226,9 @@ footer{padding:36px 0;font-size:14px;color:var(--mut);text-align:center}
 @media(max-width:480px){
   .auth-name-row{grid-template-columns:1fr}
 }
+
+.auth-field input::placeholder{color:var(--mut);opacity:1}
+.auth-submit:focus-visible,.auth-link:focus-visible,.auth-show:focus-visible,.auth-close:focus-visible{outline:2px solid var(--acc);outline-offset:4px}
 
 /* ============================================================
    ACCOUNT DASHBOARD
@@ -2297,3 +2300,7 @@ html, body{overflow-y:auto !important;height:auto !important}
 .profile-modal .profile-sidebar{
   overflow:hidden;
 }
+
+/* ---- Down payment form ---- */
+.pay-row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.pay-error{color:#b3261e;font-size:14px;margin:12px 0 0}

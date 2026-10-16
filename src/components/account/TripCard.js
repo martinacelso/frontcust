@@ -1,4 +1,6 @@
-import { nights, P, TYPES } from '../../context/AccountContext'
+import { nights, P, useAccount } from '../../context/AccountContext'
+
+import { hotelDate } from '../../utils/hotel'
 
 const STATUS_LABELS = {
   confirmed: 'Confirmed',
@@ -8,10 +10,11 @@ const STATUS_LABELS = {
 }
 
 export default function TripCard({ booking, onViewDetails, onCancel }) {
+  const { TYPES } = useAccount()
   const room = TYPES.find((t) => t.n === booking.type)
   const nightCount = nights(booking.in, booking.out)
-  const total = nightCount * room.r
-  const today = new Date().toISOString().slice(0, 10)
+  const total = booking.total ?? nightCount * (room?.r || 0)
+  const today = hotelDate()
   const canCancel = booking.st === 'confirmed' && booking.in > today
 
   return (

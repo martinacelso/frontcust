@@ -1,3 +1,4 @@
+import { profileError, passwordError } from '../../utils/validation'
 import { useState } from 'react'
 import { useAdmin, MODS } from '../../context/AdminContext'
 
@@ -5,6 +6,8 @@ export default function StaffModule() {
   const {
     staff, perms, user, setStaff, setPerms, nextId, logAction,
   } = useAdmin()
+
+  const { can } = useAdmin()
 
   const [tab, setTab] = useState('st')
   const [editModal, setEditModal] = useState(null)
@@ -19,7 +22,12 @@ export default function StaffModule() {
   }
 
   function saveEdit() {
-    if (!editModal.name.trim() || !editModal.email.trim()) return
+    if (!can('staff')) return window.alert('You do not have permission to manage staff.')
+    const error = profileError(editModal, staff, editModal.id) || (!editModal.id ? passwordError(editModal.pw) : '')
+    if (error) return window.alert(error)
+    if (!roles.includes(editModal.role)) return window.alert('Select a valid role.')
+    if (editModal.id === user.id && editModal.role !== user.role) return window.alert('You cannot change your own role.')
+    if (editModal.id && !staff.some((s) => s.id === editModal.id)) return window.alert('This employee no longer exists.')
     logAction(
       editModal.id ? 'Edited employee' : 'Added employee',
       editModal.name,
@@ -51,21 +59,29 @@ export default function StaffModule() {
   }
 
   function toggleStaff(id) {
+    if (!can('staff')) return window.alert('You do not have permission to manage staff.')
     if (id === user.id) return window.alert("You can't disable your own account.")
     const s = staff.find((x) => x.id === id)
+    if (!s) return window.alert('This employee no longer exists.')
+    if (!window.confirm(`${s.on ? 'Disable' : 'Enable'} ${s.name}'s account?`)) return
     logAction(s.on ? 'Disabled employee' : 'Enabled employee', s.name, s.role)
     setStaff((prev) => prev.map((x) => (x.id === id ? { ...x, on: !x.on } : x)))
   }
 
   function resetPassword(id) {
+    if (!can('staff')) return window.alert('You do not have permission to manage staff.')
     const s = staff.find((x) => x.id === id)
-    logAction('Reset password', s.name, 'Reset to welcome1')
+    if (!s) return window.alert('This employee no longer exists.')
+    if (!window.confirm(`Reset ${s.name}'s password to the default welcome1?`)) return
+    logAction('Reset password', s.name, 'Password reset')
     setStaff((prev) => prev.map((x) => (x.id === id ? { ...x, pw: 'welcome1' } : x)))
     window.alert('Password reset to: welcome1')
   }
 
   function deleteStaff(id) {
+    if (!can('staff')) return window.alert('You do not have permission to manage staff.')
     if (id === user.id) return window.alert("You can't delete your own account.")
+    if (!staff.some((s) => s.id === id)) return window.alert('This employee no longer exists.')
     if (window.confirm('Delete this employee?')) {
       const s = staff.find((x) => x.id === id)
       logAction('Deleted employee', s.name, s.role)
@@ -74,6 +90,10 @@ export default function StaffModule() {
   }
 
   function togglePermission(role, moduleId, enabled) {
+    if (!can('staff')) return window.alert('You do not have permission to manage staff.')
+    if (!Object.hasOwn(perms, role) || !MODS.some(([id]) => id === moduleId)) return window.alert('Choose a valid role and module.')
+    if (role === 'Admin' || moduleId === 'dash') return window.alert('Administrator access and dashboard access are required.')
+    if (!window.confirm(`${enabled ? 'Grant' : 'Remove'} ${moduleId} access for ${role}?`)) return
     logAction('Edited permissions', role, `${enabled ? 'Enabled' : 'Disabled'} ${moduleId}`)
     setPerms((prev) => {
       const list = [...(prev[role] || [])]

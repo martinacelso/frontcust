@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useAccount } from '../../context/AccountContext'
+import { hotelDate } from '../../utils/hotel'
 import TripCard from './TripCard'
 import BookingModal from './BookingModal'
 
@@ -8,7 +9,7 @@ export default function TripsTab() {
   const [modal, setModal] = useState(null)
 
   const mine = myBookings()
-  const today = new Date().toISOString().slice(0, 10)
+  const today = hotelDate()
   const isUpcoming = (b) =>
     b.st !== 'cancelled' && b.out >= today && b.st !== 'checked-out'
 

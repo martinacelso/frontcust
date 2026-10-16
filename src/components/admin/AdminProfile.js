@@ -9,6 +9,7 @@ export default function AdminProfile({ onClose }) {
   const [phone, setPhone] = useState(user.phone || '')
 
   const [saved, setSaved] = useState(false)
+  const [profileError, setProfileError] = useState('')
 
   const [current, setCurrent] = useState('')
   const [next, setNext] = useState('')
@@ -26,12 +27,14 @@ export default function AdminProfile({ onClose }) {
   const memberSince = '2024'
 
   function handleSaveProfile() {
-    if (!name.trim() || !email.trim()) return
-    updateSelf({
+    setSaved(false)
+    setProfileError('')
+    const result = updateSelf({
       name: name.trim(),
       email: email.trim().toLowerCase(),
       phone: phone.trim(),
     })
+    if (result?.error) return setProfileError(result.error)
     setSaved(true)
     setTimeout(() => setSaved(false), 2200)
   }
@@ -46,7 +49,8 @@ export default function AdminProfile({ onClose }) {
     if (next.length > 20) return setPwError('New password must be 20 characters or fewer.')
     if (next !== confirm) return setPwError('New passwords do not match.')
 
-    updateSelf({ pw: next })
+    const result = updateSelf({ pw: next })
+    if (result?.error) return setPwError(result.error)
     setCurrent('')
     setNext('')
     setConfirm('')
@@ -127,7 +131,8 @@ export default function AdminProfile({ onClose }) {
 
               <div className="acc-form-footer">
                 <button className="btn" onClick={handleSaveProfile}>Save changes</button>
-                {saved && <span className="acc-saved">✓ Profile updated</span>}
+                {profileError && <p className="acc-error" role="alert">{profileError}</p>}
+              {saved && <span className="acc-saved">✓ Profile updated</span>}
               </div>
             </div>
 

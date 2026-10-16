@@ -1,3 +1,6 @@
+import { allocationPlan, activeBooking } from '../../utils/inventory'
+import { deleteRoomError, roomStatusError } from '../../utils/actionValidation'
+import { textError, moneyError } from '../../utils/validation'
 import { useState } from 'react'
 import { useAdmin, T, sd, P } from '../../context/AdminContext'
 
@@ -13,8 +16,9 @@ export default function RoomsModule() {
     types, rooms, setTypes, setRooms, by, free, nextId, logAction,
   } = useAdmin()
 
+  const { bookings, can } = useAdmin()
+
   const [roomModal, setRoomModal] = useState(null)
-  const [typeEditModal, setTypeEditModal] = useState(null)
   const [newTypeMode, setNewTypeMode] = useState(false)
 
   const today = T()
@@ -29,6 +33,7 @@ export default function RoomsModule() {
         type: types[0]?.n || '',
         status: 'available',
         rate: types[0]?.r || 0,
+        capacity: types[0]?.s || 2,
       })
       setNewTypeMode(false)
     } else {
@@ -40,45 +45,66 @@ export default function RoomsModule() {
         type: r.type,
         status: r.status,
         rate: typeRow?.r || 0,
+        capacity: typeRow?.s || 2,
       })
       setNewTypeMode(false)
     }
   }
 
   function saveRoom() {
-    if (!String(roomModal.no).trim()) return
-    if (!roomModal.type.trim()) return
+    if (!can('rooms')) return window.alert('You do not have permission to change rooms.')
+    if (!roomModal) return
+    const existingRoom = roomModal.id ? by('rooms', roomModal.id) : { status: 'available' }
+    const statusError = roomStatusError(existingRoom, roomModal.status, bookings)
+    if (statusError) return window.alert(statusError)
+    if (existingRoom?.status === 'occupied' && existingRoom.type !== roomModal.type) return window.alert('An occupied room cannot change type.')
+    const error = textError(roomModal.no, 'Room number', 20) || textError(roomModal.type, 'Room type', 100) || moneyError(roomModal.rate, 'Nightly rate')
+    if (error) return window.alert(error)
+    if (rooms.some((r) => r.id !== roomModal.id && String(r.no).trim().toLowerCase() === String(roomModal.no).trim().toLowerCase())) return window.alert('This room number already exists.')
+    if (!STATUS_OPTIONS.some(([id]) => id === roomModal.status)) return window.alert('Select a valid room status.')
+    const draft = { ...roomModal, no: String(roomModal.no).trim(), type: types.find((t) => t.n.toLowerCase() === roomModal.type.trim().toLowerCase())?.n || roomModal.type.trim() }
+    if (!String(draft.no).trim()) return
+    if (!draft.type.trim()) return
 
-    // If new type was typed, create it in the types list first
-    const existingType = types.find((t) => t.n === roomModal.type)
+    const capacity = Number(draft.capacity)
+    if (!Number.isInteger(capacity) || capacity < 1 || capacity > 50) return window.alert('Capacity must be a whole number from 1 to 50.')
+    if (bookings.some((b) => activeBooking(b) && b.type === draft.type && (b.gCount || (b.adults ?? 2) + (b.children ?? 0)) > capacity)) return window.alert('This capacity is too small for an existing reservation.')
+    if (draft.id) {
+      const proposed = rooms.map((r) => r.id === draft.id ? { ...r, type: draft.type, status: draft.status } : r)
+      const affected = bookings.filter((b) => activeBooking(b) && (b.out > today || b.st === 'checked-in') && (b.type === draft.type || b.type === existingRoom.type))
+      if (affected.some((b) => !allocationPlan(proposed, bookings, b, b.id))) return window.alert('This room change would leave a reservation without a room. Reassign or cancel that reservation first.')
+    }
+
+    // Existing confirmed quotes keep their original rates.
+    const existingType = types.find((t) => t.n === draft.type)
     if (!existingType) {
       setTypes((prev) => [
         ...prev,
-        { n: roomModal.type.trim(), r: +roomModal.rate || 0 },
+        { n: draft.type.trim(), r: +draft.rate, s: capacity, img: '/room-1.jpg', desc: 'Contact the hotel for room details.' },
       ])
-    } else if (+roomModal.rate && existingType.r !== +roomModal.rate) {
+    } else {
       // Update rate if user changed it
       setTypes((prev) =>
         prev.map((t) =>
-          t.n === existingType.n ? { ...t, r: +roomModal.rate } : t
+          t.n === existingType.n ? { ...t, r: +draft.rate, s: capacity } : t
         )
       )
     }
 
-    if (roomModal.id) {
+    if (draft.id) {
       logAction(
         'Edited room',
-        `Room ${roomModal.no}`,
-        `${roomModal.type} · ${roomModal.status}`
+        `Room ${draft.no}`,
+        `${draft.type} · ${draft.status}`
       )
       setRooms((prev) =>
         prev.map((r) =>
-          r.id === roomModal.id
+          r.id === draft.id
             ? {
                 ...r,
-                no: roomModal.no,
-                type: roomModal.type.trim(),
-                status: roomModal.status,
+                no: draft.no,
+                type: draft.type.trim(),
+                status: draft.status,
               }
             : r
         )
@@ -86,16 +112,16 @@ export default function RoomsModule() {
     } else {
       logAction(
         'Added room',
-        `Room ${roomModal.no}`,
-        `${roomModal.type} · ${roomModal.status}`
+        `Room ${draft.no}`,
+        `${draft.type} · ${draft.status}`
       )
       setRooms((prev) => [
         ...prev,
         {
           id: nextId(),
-          no: roomModal.no,
-          type: roomModal.type.trim(),
-          status: roomModal.status,
+          no: draft.no,
+          type: draft.type.trim(),
+          status: draft.status,
           hk: '',
         },
       ])
@@ -104,32 +130,18 @@ export default function RoomsModule() {
   }
 
   function deleteRoom(id) {
+    if (!can('rooms')) return window.alert('You do not have permission to delete rooms.')
+    const error = deleteRoomError(by('rooms', id), bookings)
+    if (error) return window.alert(error)
+    const proposed = rooms.filter((r) => r.id !== id)
+    const affected = bookings.filter((b) => activeBooking(b) && (b.out > today || b.st === 'checked-in') && b.type === by('rooms', id)?.type)
+    if (affected.some((b) => !allocationPlan(proposed, bookings, b, b.id))) return window.alert('This room is needed for an existing reservation.')
     if (window.confirm('Delete this room?')) {
       logAction('Deleted room', `Room ${by('rooms', id)?.no}`, '')
       setRooms((prev) => prev.filter((r) => r.id !== id))
     }
   }
 
-  // ---- type edit ----
-  function openTypeEdit(name) {
-    const t = types.find((x) => x.n === name)
-    setTypeEditModal({ originalName: name, rate: t?.r || 0 })
-  }
-
-  function saveTypeEdit() {
-    if (!typeEditModal.rate) return
-    logAction(
-      'Edited room type',
-      typeEditModal.originalName,
-      `New rate ${P(+typeEditModal.rate)}`
-    )
-    setTypes((prev) =>
-      prev.map((t) =>
-        t.n === typeEditModal.originalName ? { ...t, r: +typeEditModal.rate } : t
-      )
-    )
-    setTypeEditModal(null)
-  }
 
   return (
     <>
@@ -219,6 +231,7 @@ export default function RoomsModule() {
                     ...roomModal,
                     type: e.target.value,
                     rate: t?.r || 0,
+                    capacity: t?.s || 2,
                   })
                 }}
               >
@@ -255,6 +268,9 @@ export default function RoomsModule() {
               onChange={(e) => setRoomModal({ ...roomModal, rate: e.target.value })}
             />
 
+            <label>Maximum guests for this room type</label>
+            <input type="number" min="1" max="50" step="1" value={roomModal.capacity} onChange={(e) => setRoomModal({ ...roomModal, capacity: e.target.value })} />
+            <p className="acc-muted acc-small">Rate and capacity apply to every room of this type. Existing reservations keep their agreed rate.</p>
             <label>Status</label>
             <select
               value={roomModal.status}
@@ -275,28 +291,7 @@ export default function RoomsModule() {
         </div>
       )}
 
-      {/* ---- Type edit modal (only reachable from a "Manage types" flow if needed) ---- */}
-      {typeEditModal && (
-        <div className="acc-modal-overlay" onClick={() => setTypeEditModal(null)}>
-          <div className="acc-modal" onClick={(e) => e.stopPropagation()}>
-            <h3>Edit rate – {typeEditModal.originalName}</h3>
-            <label>Rate per night (₱)</label>
-            <input
-              type="number"
-              value={typeEditModal.rate}
-              onChange={(e) =>
-                setTypeEditModal({ ...typeEditModal, rate: e.target.value })
-              }
-            />
-            <div className="acc-modal-actions">
-              <button className="btn ghost-dark" onClick={() => setTypeEditModal(null)}>
-                Cancel
-              </button>
-              <button className="btn" onClick={saveTypeEdit}>Save</button>
-            </div>
-          </div>
-        </div>
-      )}
+
     </>
   )
 }

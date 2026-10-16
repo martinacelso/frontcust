@@ -1,6 +1,10 @@
 import { useState } from 'react'
 import { useAdmin, sd, P } from '../../context/AdminContext'
 
+import { hotelDate, addDays, stayNights } from '../../utils/hotel'
+import { validDate } from '../../utils/validation'
+import { paymentLedger, netReceipts, occupiedRooms } from '../../utils/reporting'
+
 const TABS = [
   ['bk', 'Bookings'],
   ['oc', 'Occupancy'],
@@ -10,12 +14,15 @@ const TABS = [
 ]
 
 export default function ReportsModule() {
-  const { bookings, rooms, guests, by, total, paid } = useAdmin()
+  const { bookings, rooms, guests, by, total } = useAdmin()
 
   const [tab, setTab] = useState('bk')
   const [from, setFrom] = useState(sd(-30))
   const [to, setTo] = useState(sd(7))
 
+  const rangeError = !validDate(from) || !validDate(to) || from > to
+    ? 'Choose a valid date range, with From on or before To.'
+    : tab === 'oc' && stayNights(from, to) >= 90 ? 'Select at most 90 days for the occupancy report.' : ''
   const inRange = (d) => d >= from && d <= to
 
   // ---- Bookings report ----
@@ -38,27 +45,9 @@ export default function ReportsModule() {
   // ---- Occupancy report ----
   function occupancyReport() {
     const rows = []
-    // Walk day by day from `from` to `to` (max 90 days)
-    const start = new Date(from)
-    const end = new Date(to)
-    let d = new Date(start)
-    let guard = 0
-    while (d <= end && guard < 90) {
-      const iso = d.toISOString().slice(0, 10)
-      const occupied = bookings.filter(
-        (b) =>
-          (b.st === 'checked-in' || b.st === 'checked-out') &&
-          b.in <= iso &&
-          b.out > iso
-      ).length
-      rows.push([
-        iso,
-        occupied,
-        rooms.length,
-        Math.round((occupied / rooms.length) * 100) + '%',
-      ])
-      d.setDate(d.getDate() + 1)
-      guard++
+    for (let day = from; day <= to; day = addDays(day, 1)) {
+      const occupied = occupiedRooms(bookings, day)
+      rows.push([day, occupied, rooms.length, rooms.length ? Math.round(occupied / rooms.length * 100) + '%' : '—'])
     }
     return {
       headers: ['Date', 'Occupied', 'Rooms', 'Occupancy'],
@@ -68,44 +57,21 @@ export default function ReportsModule() {
 
   // ---- Revenue report ----
   function revenueReport() {
-    const rows = []
-    let grand = 0
-    bookings.forEach((b) => {
-      b.pays.forEach((p) => {
-        if (inRange(p.d)) {
-          grand += p.a
-          rows.push([
-            p.d,
-            '#' + b.id,
-            by('guests', b.g)?.name || '—',
-            p.m,
-            P(p.a),
-          ])
-        }
-      })
-    })
-    rows.push([
-      { strong: 'Total' },
-      '',
-      '',
-      '',
-      { strong: P(grand) },
+    const rows = paymentLedger(bookings).filter((p) => inRange(p.d)).map((p) => [
+      p.d, '#' + p.bookingId, by('guests', p.guestId)?.name || '—', p.kind + ' · ' + p.m, P(p.amount),
     ])
-    return {
-      headers: ['Date', 'Ref', 'Guest', 'Method', 'Amount'],
-      rows,
-    }
+    rows.push([{ strong: 'Net receipts' }, '', '', '', { strong: P(netReceipts(bookings, from, to)) }])
+    return { headers: ['Date', 'Ref', 'Guest', 'Movement / method', 'Amount'], rows }
   }
 
   // ---- Guests report ----
   function guestsReport() {
     const rows = guests.map((g) => {
-      const gbs = bookings.filter((b) => b.g === g.id && b.st !== 'cancelled')
-      const totalPaid = gbs.reduce((s, b) => s + paid(b), 0)
-      return [g.name, gbs.length, P(totalPaid)]
+      const gbs = bookings.filter((b) => b.g === g.id)
+      return [g.name, gbs.filter((b) => inRange(b.in) && b.st !== 'cancelled').length, P(netReceipts(gbs, from, to))]
     })
     return {
-      headers: ['Guest', 'Stays', 'Total paid'],
+      headers: ['Guest', 'Reservations arriving in range', 'Net receipts in range'],
       rows,
     }
   }
@@ -115,17 +81,17 @@ export default function ReportsModule() {
     const rows = []
     bookings.forEach((b) => {
       if (b.room && (b.st === 'checked-in' || b.st === 'checked-out')) {
-        if (inRange(b.in)) {
+        if (b.checkedInAt && inRange(hotelDate(b.checkedInAt))) {
           rows.push([
-            b.in,
+            hotelDate(b.checkedInAt),
             'Check-in',
             by('guests', b.g)?.name || '—',
             by('rooms', b.room)?.no || '—',
           ])
         }
-        if (b.st === 'checked-out' && inRange(b.out)) {
+        if (b.checkedOutAt && inRange(hotelDate(b.checkedOutAt))) {
           rows.push([
-            b.out,
+            hotelDate(b.checkedOutAt),
             'Check-out',
             by('guests', b.g)?.name || '—',
             by('rooms', b.room)?.no || '—',
@@ -140,7 +106,7 @@ export default function ReportsModule() {
     }
   }
 
-  const data = {
+  const data = rangeError ? { headers: [], rows: [] } : {
     bk: bookingsReport,
     oc: occupancyReport,
     rv: revenueReport,
@@ -196,7 +162,10 @@ export default function ReportsModule() {
         </div>
       </div>
 
-      <div className="admin-table-wrap">
+      {rangeError && <p className="acc-error" role="alert">{rangeError}</p>}
+      {tab === 'oc' && <p className="admin-muted">Actual overnight occupancy from recorded check-in/out dates, using the current room count. Future nights are not counted as occupied.</p>}
+      {tab === 'rv' && <p className="admin-muted">Payments less recorded refunds, including cancelled reservations. These totals reflect recorded payment entries less refunds; they do not verify money received or represent earned revenue.</p>}
+      {!rangeError && <div className="admin-table-wrap">
         <table className="admin-table">
           <thead>
             <tr>
@@ -221,7 +190,7 @@ export default function ReportsModule() {
             )}
           </tbody>
         </table>
-      </div>
+      </div>}
     </>
   )
 }

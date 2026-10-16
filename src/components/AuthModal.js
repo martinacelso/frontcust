@@ -1,7 +1,12 @@
+import { emailError, textError } from '../utils/validation'
 import { useState, useEffect } from 'react'
 import { useAuth } from '../hooks/useAuth'
 
 export default function AuthModal({ isOpen, onClose }) {
+  return isOpen ? <AuthDialog onClose={onClose} /> : null
+}
+
+function AuthDialog({ onClose }) {
   const { handleSignIn, handleSignUp } = useAuth()
 
   const [mode, setMode] = useState('signin') // 'signin' | 'signup' | 'reset'
@@ -11,21 +16,26 @@ export default function AuthModal({ isOpen, onClose }) {
   const [password, setPassword] = useState('')
   const [showPass, setShowPass] = useState(false)
   const [message, setMessage] = useState('')
+  const [notification, setNotification] = useState('')
+
+  useEffect(() => {
+    if (!notification) return
+    const timer = setTimeout(() => setNotification(''), 6000)
+    return () => clearTimeout(timer)
+  }, [notification])
 
   useEffect(() => {
     function onKey(e) {
       if (e.key === 'Escape') onClose()
     }
-    if (isOpen) document.addEventListener('keydown', onKey)
+    document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
-  }, [isOpen, onClose])
+  }, [onClose])
 
   useEffect(() => {
-    document.body.style.overflow = isOpen ? 'hidden' : ''
+    document.body.style.overflow = 'hidden'
     return () => { document.body.style.overflow = '' }
-  }, [isOpen])
-
-  if (!isOpen) return null
+  }, [])
 
   function reset() {
     setFirstName('')
@@ -43,10 +53,12 @@ export default function AuthModal({ isOpen, onClose }) {
 
   function handleSubmit(e) {
     e.preventDefault()
+    const error = emailError(email)
+    if (error) return setMessage(error)
 
     if (mode === 'reset') {
       if (!email) return setMessage('Please enter your email.')
-      return setMessage('Demo only: reset link would be emailed to you.')
+      return setMessage('Password reset by email is not available yet. No reset link has been sent.')
     }
 
     if (!email || !password) return setMessage('Please fill in all fields.')
@@ -60,7 +72,7 @@ export default function AuthModal({ isOpen, onClose }) {
     }
 
     // signup — guests only
-    if (!firstName || !lastName) {
+    if (textError(firstName, 'First name') || textError(lastName, 'Last name')) {
       return setMessage('Please enter your first and last name.')
     }
     const result = handleSignUp({
@@ -70,8 +82,11 @@ export default function AuthModal({ isOpen, onClose }) {
       phone: '',
     })
     if (result.error) return setMessage(result.error)
+    const registeredEmail = email.trim().toLowerCase()
     reset()
-    onClose()
+    setMode('signin')
+    setEmail(registeredEmail)
+    setNotification('Your account is ready. Please sign in with your email and password.')
   }
 
   const heading =
@@ -89,6 +104,35 @@ export default function AuthModal({ isOpen, onClose }) {
 
   return (
     <div className="auth-overlay">
+      {notification && (
+        <div
+          role="status"
+          aria-live="polite"
+          style={{
+            position: 'fixed', top: 20, right: 20, zIndex: 10000,
+            width: 'min(380px, calc(100vw - 40px))', boxSizing: 'border-box',
+            display: 'flex', alignItems: 'flex-start', gap: 12,
+            padding: '16px 18px', borderRadius: 12, background: '#fff',
+            border: '1px solid #cce5d7', borderLeft: '5px solid #287b50',
+            boxShadow: '0 8px 30px rgba(0,0,0,.16)', color: '#234332',
+            textAlign: 'left', fontSize: 14, lineHeight: 1.5,
+          }}
+        >
+          <span aria-hidden="true" style={{ color: '#287b50', fontSize: 22 }}>✓</span>
+          <div style={{ flex: 1 }}>
+            <strong style={{ display: 'block', marginBottom: 3 }}>Account created successfully!</strong>
+            <span>{notification}</span>
+          </div>
+          <button
+            type="button"
+            aria-label="Dismiss notification"
+            onClick={() => setNotification('')}
+            style={{ border: 0, background: 'transparent', color: '#466253', cursor: 'pointer', fontSize: 22, padding: '0 4px', lineHeight: 1.2 }}
+          >
+            ×
+          </button>
+        </div>
+      )}
       <div className="auth-left">
         <div className="auth-logo">TWIN LAKES HOTEL</div>
         <div className="auth-welcome">
@@ -177,7 +221,7 @@ export default function AuthModal({ isOpen, onClose }) {
 
             <button type="submit" className="auth-submit">{buttonLabel}</button>
 
-            {message && <p className="auth-msg">{message}</p>}
+            {message && <p className="auth-msg" role="alert">{message}</p>}
           </form>
 
           <p className="auth-switch">

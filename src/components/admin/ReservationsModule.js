@@ -1,3 +1,7 @@
+import { quoteStay } from '../../utils/promotions'
+import { cents } from '../../utils/hotel'
+import { cancelError } from '../../utils/actionValidation'
+import { guestError, stayError } from '../../utils/validation'
 import { useState } from 'react'
 import { useAdmin, T, sd, nights, P } from '../../context/AdminContext'
 
@@ -8,8 +12,10 @@ const MODIFICATION_FEE = 500
 export default function ReservationsModule() {
   const {
     rooms, guests, bookings, types, setBookings, setGuests,
-    by, rate, total, free, nextId, logAction,
+    by, rate, total, free, nextId, logAction, saveReservation, paid,
   } = useAdmin()
+
+  const { can } = useAdmin()
 
   const [query, setQuery] = useState({
     in: T(),
@@ -19,6 +25,7 @@ export default function ReservationsModule() {
     children: 0,
   })
   const [form, setForm] = useState(query)
+  const [searchError, setSearchError] = useState('')
 
   const [guestModal, setGuestModal] = useState(null)
   const [editModal, setEditModal] = useState(null)
@@ -26,6 +33,21 @@ export default function ReservationsModule() {
   const [feeConfirm, setFeeConfirm] = useState(null)
 
   function searchRooms() {
+    const error = stayError(query)
+    if (error) return setSearchError(error)
+    if (!query.in || !query.out) {
+      setSearchError('Choose both check-in and check-out dates.')
+      return
+    }
+    if (query.in < T()) {
+      setSearchError('Check-in can’t be in the past.')
+      return
+    }
+    if (query.in >= query.out) {
+      setSearchError('Check-out must be after check-in.')
+      return
+    }
+    setSearchError('')
     setForm(query)
   }
 
@@ -33,7 +55,7 @@ export default function ReservationsModule() {
   const availableRooms = rooms.filter(
     (r) =>
       (!form.type || r.type === form.type) &&
-      form.in < form.out &&
+      !stayError(form, { capacity: types.find((t) => t.n === r.type)?.s }) &&
       free(r, form.in, form.out)
   )
 
@@ -57,6 +79,8 @@ export default function ReservationsModule() {
   }
 
   function validateGuestForm(g) {
+    const error = guestError(g)
+    if (error) return error
     if (!g.firstName.trim()) return 'First name is required.'
     if (!g.lastName.trim()) return 'Last name is required.'
     if (!g.phone.trim()) return 'Phone is required.'
@@ -67,29 +91,30 @@ export default function ReservationsModule() {
   }
 
   function confirmBook() {
-    const err = validateGuestForm(guestModal)
+    if (!can('book')) return window.alert('You do not have permission to change reservations.')
+    if (!guestModal) return
+    const selectedGuest = guestModal.guestId ? by('guests', +guestModal.guestId) : null
+    const guestName = selectedGuest?.name || `${guestModal.firstName.trim()} ${guestModal.lastName.trim()}`
+    const err = guestModal.guestId ? (!selectedGuest ? 'Select a valid guest.' : '') : validateGuestForm(guestModal)
     if (err) {
       window.alert(err)
       return
     }
 
     const room = by('rooms', guestModal.roomId)
+    const stay = stayError({ ...form, ...guestModal }, { capacity: types.find((t) => t.n === room?.type)?.s })
+    if (stay) return window.alert(stay)
+    if (!room || !free(room, form.in, form.out)) return window.alert('This room is no longer available.')
+    if (guestModal.guestId && !by('guests', +guestModal.guestId)) return window.alert('Select a valid guest.')
+    if (!SOURCES.includes(guestModal.source)) return window.alert('Select a valid booking source.')
+    const proceed = window.confirm(
+      `Create this reservation?\n\nGuest: ${guestName}\nRoom: ${room.no} - ${room.type}\nCheck-in: ${form.in}\nCheck-out: ${form.out}\nGuests: ${guestModal.adults} adult(s), ${guestModal.children} child(ren)\nRoom total: ${P(nights(form.in, form.out) * rate(room.type))}\n\nSelect OK to save, or Cancel to review the details.`
+    )
+    if (!proceed) return
     let guestId = +guestModal.guestId
 
-    if (!guestId) {
-      guestId = nextId()
-      setGuests((prev) => [
-        ...prev,
-        {
-          id: guestId,
-          name: `${guestModal.firstName.trim()} ${guestModal.lastName.trim()}`,
-          phone: guestModal.phone.trim(),
-          email: guestModal.email.trim(),
-          idType: guestModal.idType,
-          idNumber: guestModal.idNumber.trim(),
-        },
-      ])
-    }
+    const isNewGuest = !guestId
+    if (isNewGuest) guestId = nextId()
 
     const newBooking = {
       id: nextId(),
@@ -103,6 +128,8 @@ export default function ReservationsModule() {
       extras: [],
       disc: 0,
       pays: [],
+      refunds: [],
+      createdAt: new Date().toISOString(),
       adults: guestModal.adults,
       children: guestModal.children,
       gCount: guestModal.adults + guestModal.children,
@@ -111,27 +138,32 @@ export default function ReservationsModule() {
       requests: guestModal.requests,
     }
 
+    const result = saveReservation(newBooking)
+    if (result.error) return window.alert(result.error)
+    if (isNewGuest) setGuests((prev) => [...prev, { id: guestId, name: guestName, email: guestModal.email.trim().toLowerCase(), phone: guestModal.phone.trim(), idType: guestModal.idType, idNumber: guestModal.idNumber.trim() }])
     logAction(
       'Created booking',
       `#${newBooking.id}`,
-      `${guestModal.firstName} ${guestModal.lastName} · Room ${room.no} · ${newBooking.in} → ${newBooking.out}`
+      `${guestName} · Room ${room.no} · ${newBooking.in} → ${newBooking.out}`
     )
 
-    setBookings((prev) => [...prev, newBooking])
     setGuestModal(null)
     setConfirmModal({
-      booking: newBooking,
+      booking: result.booking,
       room,
-      guestName: `${guestModal.firstName} ${guestModal.lastName}`.trim(),
+      guestName,
     })
   }
 
   // ---------- CANCEL ----------
   function cancelBooking(id) {
+    if (!can('book')) return window.alert('You do not have permission to change reservations.')
+    const error = cancelError(by('bookings', id))
+    if (error) return window.alert(error)
     if (window.confirm(`Cancel reservation #${id}?`)) {
       logAction('Cancelled booking', `#${id}`, 'Reservation cancelled')
       setBookings((prev) =>
-        prev.map((b) => (b.id === id ? { ...b, st: 'cancelled' } : b))
+        prev.map((b) => (b.id === id ? { ...b, st: 'cancelled', cancelledAt: new Date().toISOString() } : b))
       )
     }
   }
@@ -156,44 +188,64 @@ export default function ReservationsModule() {
   }
 
   function attemptSaveEdit() {
+    if (!can('book')) return window.alert('You do not have permission to change reservations.')
+    const existing = by('bookings', editModal.id)
+    if (!existing || existing.st !== 'confirmed') return window.alert('Only confirmed bookings can be edited.')
+    const error = stayError(editModal, { capacity: types.find((t) => t.n === editModal.type)?.s })
+    if (error) return window.alert(error)
+    if (!types.some((t) => t.n === editModal.type)) return window.alert('Select a valid room type.')
     if (editModal.in >= editModal.out) {
       window.alert('Check-out must be after check-in.')
       return
     }
-    setFeeConfirm({ pending: { ...editModal } })
+    // If the booking keeps its assigned room, the new dates must not clash with another booking
+    const original = by('bookings', editModal.id)
+    const assigned = original && editModal.room ? by('rooms', editModal.room) : null
+    if (assigned && original.type === editModal.type && !free(assigned, editModal.in, editModal.out, editModal.id)) {
+      window.alert(`Room ${assigned.no} isn’t available for those dates. Choose different dates or another room type.`)
+      return
+    }
+    const quote = quoteStay(types.find((t) => t.n === editModal.type), editModal.in, editModal.out, original.promoId, original.type === editModal.type ? original.rate : undefined)
+    if (quote.error) return window.alert(quote.error)
+    const discount = original.promoId ? quote.discount : Math.min(original.disc || 0, quote.gross)
+    const preview = total({ ...original, in: editModal.in, out: editModal.out, rate: quote.rate, disc: discount, extras: [...original.extras, { d: 'Modification fee', a: MODIFICATION_FEE }] })
+    if (cents(preview) < cents(paid(original))) return window.alert('Record the required partial refund in Billing before reducing this reservation below its net payments.')
+    setFeeConfirm({ pending: { ...editModal }, preview })
   }
 
   function confirmEditWithFee() {
+    if (!can('book')) return window.alert('You do not have permission to change reservations.')
+    if (!feeConfirm) return
     const em = feeConfirm.pending
     const b = by('bookings', em.id)
-    if (!b) return
+    if (!b || b.st !== 'confirmed') return window.alert('Only a confirmed reservation can be modified.')
+    const error = stayError(em, { capacity: types.find((t) => t.n === em.type)?.s })
+    if (error) return window.alert(error)
+    if (!types.some((t) => t.n === em.type)) return window.alert('Choose a valid room type.')
+    const assigned = b.room ? by('rooms', b.room) : null
+    if (assigned && b.type === em.type && !free(assigned, em.in, em.out, b.id)) return window.alert('The room is no longer available for these dates.')
 
     const newExtras = [
       ...b.extras,
       { d: `Modification fee (${T()})`, a: MODIFICATION_FEE },
     ]
 
-    const newTypeRate = rate(em.type)
+    // Keep the agreed nightly rate for the same type; changed types use current rates.
+    const quote = quoteStay(types.find((t) => t.n === em.type), em.in, em.out, b.promoId, em.type === b.type ? b.rate : undefined)
+    if (quote.error) return window.alert(quote.error)
+    const nextDiscount = b.promoId ? quote.discount : Math.min(b.disc || 0, quote.gross)
+    const nextBill = { ...b, in: em.in, out: em.out, type: em.type, rate: quote.rate, disc: nextDiscount, extras: newExtras }
+    if (cents(total(nextBill)) < cents(paid(b))) return window.alert('This change would reduce the bill below payments received. Review the payment/refund first.')
+    if (cents(total(nextBill)) !== cents(feeConfirm.preview)) return window.alert('The quote changed. Cancel this confirmation and review the new total.')
+    const newTypeRate = quote.rate
 
-    setBookings((prev) =>
-      prev.map((x) =>
-        x.id === b.id
-          ? {
-              ...x,
-              in: em.in,
-              out: em.out,
-              type: em.type,
-              rate: newTypeRate,
-              adults: em.adults,
-              children: em.children,
-              gCount: em.adults + em.children,
-              arrivalTime: em.arrivalTime,
-              requests: em.requests,
-              extras: newExtras,
-            }
-          : x
-      )
-    )
+    const result = saveReservation({ ...nextBill,
+      room: em.type === b.type ? b.room : null,
+      adults: em.adults, children: em.children, gCount: em.adults + em.children,
+      arrivalTime: em.arrivalTime, requests: em.requests,
+      rate: newTypeRate, quote: { ...quote, discount: nextDiscount },
+    }, b.id)
+    if (result.error) return window.alert(result.error)
 
     logAction(
       'Edited booking',
@@ -208,7 +260,7 @@ export default function ReservationsModule() {
   const upd = (key, value) => setGuestModal((m) => ({ ...m, [key]: value }))
   const updEdit = (key, value) => setEditModal((m) => ({ ...m, [key]: value }))
 
-  const canEdit = (b) => b.st === 'confirmed' && b.in >= T()
+  const canEdit = (b) => b.st === 'confirmed'
 
   return (
     <>
@@ -218,16 +270,18 @@ export default function ReservationsModule() {
             <label>Check-in</label>
             <input
               type="date"
+              min={T()}
               value={query.in}
-              onChange={(e) => setQuery({ ...query, in: e.target.value })}
+              onChange={(e) => { setQuery({ ...query, in: e.target.value }); setSearchError('') }}
             />
           </div>
           <div>
             <label>Check-out</label>
             <input
               type="date"
+              min={query.in || T()}
               value={query.out}
-              onChange={(e) => setQuery({ ...query, out: e.target.value })}
+              onChange={(e) => { setQuery({ ...query, out: e.target.value }); setSearchError('') }}
             />
           </div>
           <div>
@@ -266,6 +320,7 @@ export default function ReservationsModule() {
             <button className="admin-btn" onClick={searchRooms}>Search rooms</button>
           </div>
         </div>
+        {searchError && <p className="pay-error" role="alert">{searchError}</p>}
       </div>
 
       <h2 className="admin-h2">
@@ -328,7 +383,7 @@ export default function ReservationsModule() {
                   <td>#{b.id}</td>
                   <td>{guest?.name || '—'}</td>
                   <td>{r ? r.no : b.type}</td>
-                  <td>{b.gCount ?? b.g ?? '—'}</td>
+                  <td>{b.gCount ?? '—'}</td>
                   <td>{b.in} → {b.out}</td>
                   <td><span className={`admin-badge ${b.st}`}>{b.st}</span></td>
                   <td>{P(total(b))}</td>
@@ -524,7 +579,8 @@ export default function ReservationsModule() {
       {feeConfirm && (
         <div className="acc-modal-overlay" onClick={() => setFeeConfirm(null)}>
           <div className="acc-modal" onClick={(e) => e.stopPropagation()}>
-            <h3>Confirm modification fee</h3>
+            <h3>Confirm reservation changes</h3>
+            <p>Updated bill including the fee: <b>{P(feeConfirm.preview)}</b></p>
             <p className="acc-muted">
               Editing this booking will add a <b>₱{MODIFICATION_FEE.toLocaleString()}</b> modification fee to the folio. Continue?
             </p>

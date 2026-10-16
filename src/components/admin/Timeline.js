@@ -1,8 +1,9 @@
 import { useState, useEffect, useMemo } from 'react'
 import { useAdmin, P, nights } from '../../context/AdminContext'
 
+import { hotelDate, addDays } from '../../utils/hotel'
+
 const DAY_W = 100
-const ROW_H = 56
 const STATUS_COLORS = {
   confirmed: '#e8b13a',
   'checked-in': '#3dbbe0',
@@ -31,15 +32,14 @@ const ROOM_STATUS_LABELS = {
 export default function Timeline() {
   const { rooms, bookings, by, total, paid } = useAdmin()
 
-  const [now, setNow] = useState(new Date())
+  const [now, setNow] = useState(() => new Date())
   useEffect(() => {
     const id = setInterval(() => setNow(new Date()), 1000)
     return () => clearInterval(id)
   }, [])
 
   const [anchor, setAnchor] = useState(() => {
-    const d = new Date()
-    d.setDate(1)
+    const d = new Date(hotelDate().slice(0, 7) + '-01T00:00:00Z')
     return d
   })
   const [detail, setDetail] = useState(null)
@@ -51,10 +51,10 @@ export default function Timeline() {
     for (let i = 0; i < 31; i++) {
       out.push({
         iso: d.toISOString().slice(0, 10),
-        day: d.getDate(),
-        weekend: d.getDay() === 0 || d.getDay() === 6,
+        day: d.getUTCDate(),
+        weekend: d.getUTCDay() === 0 || d.getUTCDay() === 6,
       })
-      d.setDate(d.getDate() + 1)
+      d.setUTCDate(d.getUTCDate() + 1)
     }
     return out
   }, [anchor])
@@ -79,33 +79,33 @@ export default function Timeline() {
 
   const widthFor = (b) => {
     const s = new Date(Math.max(new Date(b.in), new Date(rangeStart)))
-    const e = new Date(Math.min(new Date(b.out), new Date(rangeEnd)))
+    const e = new Date(Math.min(new Date(b.out), new Date(addDays(rangeEnd, 1))))
     const n = Math.max(1, Math.round((e - s) / 864e5))
     return n * DAY_W
   }
 
   const prevMonth = () => {
     const d = new Date(anchor)
-    d.setMonth(d.getMonth() - 1)
+    d.setUTCMonth(d.getUTCMonth() - 1)
     setAnchor(d)
   }
   const nextMonth = () => {
     const d = new Date(anchor)
-    d.setMonth(d.getMonth() + 1)
+    d.setUTCMonth(d.getUTCMonth() + 1)
     setAnchor(d)
   }
   const jumpToday = () => {
-    const d = new Date()
-    d.setDate(1)
+    const d = new Date(hotelDate().slice(0, 7) + '-01T00:00:00Z')
     setAnchor(d)
   }
 
   const monthLabel = anchor.toLocaleDateString('en-US', {
     month: 'long',
     year: 'numeric',
+    timeZone: 'UTC',
   })
 
-  const today = new Date().toISOString().slice(0, 10)
+  const today = hotelDate(now)
   const todayOffset = days.findIndex((d) => d.iso === today)
 
   const detailBooking = detail ? by('bookings', detail) : null
@@ -116,6 +116,7 @@ export default function Timeline() {
       <div className="tl-clock">
         <div className="tl-clock-time">
           {now.toLocaleTimeString('en-US', {
+            timeZone: 'Asia/Manila',
             hour: '2-digit',
             minute: '2-digit',
             second: '2-digit',
@@ -123,6 +124,7 @@ export default function Timeline() {
         </div>
         <div className="tl-clock-date">
           {now.toLocaleDateString('en-US', {
+            timeZone: 'Asia/Manila',
             weekday: 'long',
             month: 'long',
             day: 'numeric',
@@ -213,7 +215,7 @@ export default function Timeline() {
                         key={b.id}
                         className="tl-bar"
                         style={{
-                          left: offsetFor(b.in),
+                          left: Math.max(0, offsetFor(b.in)),
                           width: widthFor(b),
                           background: STATUS_COLORS[b.st] || '#999',
                         }}

@@ -1,17 +1,24 @@
-import { createContext, useContext, useState } from 'react'
+import { profileError, passwordError, emailKey, localDate } from '../utils/validation'
+import { createContext, useContext, useState, useRef } from 'react'
+
+import { ROOM_TYPES } from '../utils/catalog'
+import { allocationPlan, availableRoomIds } from '../utils/inventory'
+import { addDays, billTotal, netCollected, collected, refunded, balanceDue } from '../utils/hotel'
+import { stayError } from '../utils/validation'
+import { checkInError, checkOutError } from '../utils/actionValidation'
 
 const AdminContext = createContext(null)
 
 // ---- helpers ----
-export const T = () => new Date().toISOString().slice(0, 10)
+export const T = () => localDate()
 export const sd = (n) => {
-  const x = new Date()
-  x.setDate(x.getDate() + n)
-  return x.toISOString().slice(0, 10)
+  return addDays(T(), n)
 }
 export const nights = (a, b) =>
   Math.max(1, Math.round((new Date(b) - new Date(a)) / 864e5))
 export const P = (n) => '₱' + Number(n).toLocaleString()
+// Booking reference shown to guests (e.g. TLH-0101)
+export const refOf = (b) => 'TLH-' + String(b.id).padStart(4, '0')
 
 // ---- modules ----
 export const MODS = [
@@ -28,14 +35,7 @@ export const MODS = [
 ]
 
 // ---- seed data ----
-const seedTypes = [
-  { n: 'Superior', r: 4500 },
-  { n: 'Deluxe', r: 5500 },
-  { n: 'Premier King', r: 6800 },
-  { n: 'Deluxe Executive King', r: 7500 },
-  { n: 'Family Suite', r: 12000 },
-  { n: 'Presidential Suite', r: 20000 },
-]
+const seedTypes = ROOM_TYPES
 
 const seedGuests = [
   { id: 1, name: 'Maria Santos', phone: '0917 111 2233', email: 'maria@mail.com' },
@@ -52,6 +52,10 @@ const seedBookings = [
   { id: 4, g: 4, room: null, type: 'Family Suite', in: sd(3), out: sd(5), st: 'confirmed', rate: 12000, extras: [], disc: 0, pays: [] },
   { id: 5, g: 5, room: 7, type: 'Premier King', in: sd(-4), out: sd(-2), st: 'checked-out', rate: 6800, extras: [], disc: 0, pays: [{ d: sd(-2), a: 13600, m: 'GCash' }] },
   { id: 6, g: 1, room: null, type: 'Deluxe', in: sd(6), out: sd(7), st: 'cancelled', rate: 5500, extras: [], disc: 0, pays: [] },
+  // Maria's online bookings (demo guest account)
+  { id: 7, g: 1, room: null, type: 'Deluxe', in: sd(5), out: sd(7), st: 'confirmed', rate: 5500, extras: [], disc: 0, pays: [{ d: sd(-1), a: 2200, m: 'GCash' }], adults: 2, children: 0, gCount: 2, source: 'Online', requests: 'Late arrival' },
+  { id: 8, g: 1, room: 1, type: 'Superior', in: sd(-60), out: sd(-58), st: 'checked-out', rate: 4500, extras: [], disc: 0, pays: [{ d: sd(-58), a: 9000, m: 'Card' }], adults: 2, children: 0, gCount: 2, source: 'Online', requests: '' },
+  { id: 9, g: 1, room: 8, type: 'Premier King', in: sd(-200), out: sd(-199), st: 'checked-out', rate: 6800, extras: [], disc: 0, pays: [{ d: sd(-199), a: 6800, m: 'GCash' }], adults: 2, children: 0, gCount: 2, source: 'Online', requests: '' },
 ]
 
 const seedStaff = [
@@ -82,29 +86,49 @@ seedRooms[7].status = 'dirty'
 seedRooms[11].status = 'maintenance'
 
 export function AdminProvider({ children }) {
-  const [types, setTypes] = useState(seedTypes)
-  const [rooms, setRooms] = useState(seedRooms)
+  // In-memory for now: replace with backend calls (fetch/API) when the server is ready
+  const [types, rawSetTypes] = useState(seedTypes)
+  const typeRef = useRef(types)
+  const setTypes = (update) => {
+    typeRef.current = typeof update === 'function' ? update(typeRef.current) : update
+    rawSetTypes(typeRef.current)
+  }
+  const [rooms, rawSetRooms] = useState(seedRooms)
+  const roomRef = useRef(rooms)
+  const setRooms = (update) => {
+    roomRef.current = typeof update === 'function' ? update(roomRef.current) : update
+    rawSetRooms(roomRef.current)
+  }
   const [guests, setGuests] = useState(seedGuests)
-  const [bookings, setBookings] = useState(seedBookings)
+  const [bookings, rawSetBookings] = useState(() => seedBookings.map((b) => ({ ...b,
+    checkedInAt: ['checked-in', 'checked-out'].includes(b.st) ? b.in + 'T14:00:00+08:00' : null,
+    checkedOutAt: b.st === 'checked-out' ? b.out + 'T12:00:00+08:00' : null,
+    refunds: [],
+  })))
+  const bookingRef = useRef(bookings)
+  const setBookings = (update) => {
+    const next = typeof update === 'function' ? update(bookingRef.current) : update
+    bookingRef.current = next
+    rawSetBookings(next)
+  }
   const [staff, setStaff] = useState(seedStaff)
   const [perms, setPerms] = useState(seedPerms)
-  const [uid, setUid] = useState(100)
-  const [user, setUser] = useState(null)
+  const uid = useRef(100)
   const [logs, setLogs] = useState([])
+  const [userId, setUserId] = useState(null)
+  const user = staff.find((s) => s.id === userId && s.on) || null
 
   const nextId = () => {
-    const n = uid + 1
-    setUid(n)
-    return n
+    return ++uid.current
   }
 
   // ---- audit log ----
-  const logAction = (action, target, details) => {
+  const logAction = (action, target, details, actorOverride) => {
     const entry = {
       id: Date.now() + Math.random(),
       at: new Date().toISOString(),
-      actor: user ? user.name : 'System',
-      role: user ? user.role : '—',
+      actor: actorOverride ? actorOverride.name : user ? user.name : 'System',
+      role: actorOverride ? actorOverride.role : user ? user.role : '—',
       action,
       target: target || '',
       details: details || '',
@@ -117,7 +141,7 @@ export function AdminProvider({ children }) {
     user && perms[user.role] && perms[user.role].indexOf(moduleId) > -1
 
   const by = (collection, id) => {
-    const map = { rooms, guests, bookings, staff, types }
+    const map = { rooms: roomRef.current, guests, bookings: bookingRef.current, staff, types: typeRef.current }
     return (map[collection] || []).filter((x) => x.id == id)[0]
   }
 
@@ -126,26 +150,64 @@ export function AdminProvider({ children }) {
 
   const sum = (arr, key) => arr.reduce((s, x) => s + x[key], 0)
 
-  const total = (b) => nights(b.in, b.out) * b.rate + sum(b.extras, 'a') - b.disc
-  const paid = (b) => sum(b.pays, 'a')
+  const total = billTotal
+  const paid = netCollected
 
-  const free = (r, inDate, outDate, ignoreBookingId) =>
-    r.status !== 'maintenance' &&
-    !bookings.some(
-      (b) =>
-        b.room === r.id &&
-        b.id !== ignoreBookingId &&
-        ['confirmed', 'checked-in'].indexOf(b.st) > -1 &&
-        b.in < outDate &&
-        b.out > inDate
-    )
+  const getRoomType = (name) => typeRef.current.find((t) => t.n === name)
+  const free = (r, from, to, ignoreId) => !!r && !!allocationPlan(roomRef.current, bookingRef.current, { type: r.type, in: from, out: to, room: r.id }, ignoreId)
+  const roomsAvailable = (type, from, to, ignoreId) => availableRoomIds(roomRef.current, bookingRef.current, type, from, to, ignoreId).length
+
+  const saveReservation = (record, ignoreId = null) => {
+    const type = getRoomType(record.type)
+    if (!type) return { error: 'Select a valid room type.' }
+    const error = stayError(record, { capacity: type.s })
+    if (error) return { error }
+    const old = ignoreId == null ? null : bookingRef.current.find((b) => b.id === ignoreId)
+    if (ignoreId != null && (!old || old.st !== 'confirmed')) return { error: 'Only a confirmed reservation can be changed.' }
+    if (ignoreId == null && bookingRef.current.some((b) => b.id === record.id)) return { error: 'This reservation has already been saved.' }
+    const plan = allocationPlan(roomRef.current, bookingRef.current, record, ignoreId)
+    if (!plan) return { error: 'No room is available for the whole stay. Choose another room or dates.' }
+    const saved = { ...record, room: plan.get('__candidate__'), updatedAt: new Date().toISOString() }
+    const rows = bookingRef.current.filter((b) => b.id !== ignoreId).map((b) => plan.has(b.id) ? { ...b, room: plan.get(b.id) } : b)
+    setBookings([...rows, saved])
+    return { booking: saved }
+  }
+
+  // Commit against the latest booking state, then update the physical room.
+  const checkIn = (id, roomId) => {
+    if (!can('chk')) return { error: 'You do not have permission to check in guests.' }
+    const b = by('bookings', id), r = by('rooms', roomId)
+    const error = checkInError(b, r, bookingRef.current)
+    if (error) return { error }
+    const capacityError = stayError({ ...b, adults: b.adults ?? b.gCount ?? 2, children: b.children ?? 0 }, { allowPast: true, capacity: getRoomType(b.type)?.s })
+    if (capacityError) return { error: capacityError }
+    if (!by('guests', b.g)) return { error: 'The guest record is missing.' }
+    const plan = allocationPlan(roomRef.current, bookingRef.current, { ...b, room: r.id }, b.id)
+    if (!plan) return { error: 'This room is no longer available for the whole stay.' }
+    setBookings((prev) => prev.map((x) => x.id === b.id
+      ? { ...x, room: r.id, st: 'checked-in', checkedInAt: new Date().toISOString() }
+      : plan.has(x.id) ? { ...x, room: plan.get(x.id) } : x))
+    setRooms((prev) => prev.map((x) => x.id === r.id ? { ...x, status: 'occupied' } : x))
+    logAction('Checked in', 'Booking #' + id, 'Room ' + r.no)
+    return { ok: true }
+  }
+  const checkOut = (id) => {
+    if (!can('chk')) return { error: 'You do not have permission to check out guests.' }
+    const b = by('bookings', id)
+    const error = checkOutError(b, b ? balanceDue(b) : NaN)
+    if (error) return { error }
+    setBookings((prev) => prev.map((x) => x.id === id ? { ...x, st: 'checked-out', checkedOutAt: new Date().toISOString() } : x))
+    setRooms((prev) => prev.map((x) => x.id === b.room ? { ...x, status: 'dirty' } : x))
+    logAction('Checked out', 'Booking #' + id, 'Room ' + (by('rooms', b.room)?.no || '—'))
+    return { ok: true }
+  }
 
   // ---- auth ----
   const login = (email, password) => {
-    const u = staff.filter((s) => s.email === email && s.pw === password)[0]
+    const u = staff.filter((s) => emailKey(s.email) === emailKey(email) && s.pw === password)[0]
     if (!u) return { error: 'Invalid email or password.' }
     if (!u.on) return { error: 'This account is disabled.' }
-    setUser(u)
+    setUserId(u.id)
     setLogs((prev) =>
       [
         {
@@ -163,10 +225,13 @@ export function AdminProvider({ children }) {
     return { ok: true }
   }
 
-  const logout = () => setUser(null)
+  const logout = () => setUserId(null)
 
   const updateSelf = (data) => {
-    setUser((u) => ({ ...u, ...data }))
+    if (!user) return { error: 'Please sign in again.' }
+    const error = data.pw !== undefined ? passwordError(data.pw) || (data.pw === user.pw ? 'Choose a different new password.' : '') : profileError(data, staff, user.id)
+    if (error) return { error }
+    data = data.pw !== undefined ? { pw: data.pw } : { name: data.name.trim(), email: emailKey(data.email), phone: (data.phone || '').trim() }
     setStaff((prev) => prev.map((s) => (s.id === user.id ? { ...s, ...data } : s)))
   }
 
@@ -174,7 +239,7 @@ export function AdminProvider({ children }) {
     types, rooms, guests, bookings, staff, perms, user, logs,
     setTypes, setRooms, setGuests, setBookings, setStaff, setPerms,
     can, by, rate, sum, total, paid, free, nextId, logAction,
-    login, logout, updateSelf,
+    login, logout, updateSelf, checkIn, checkOut, roomsAvailable, saveReservation, getRoomType, collected, refunded, balanceDue,
     MODS, P, nights, T, sd,
   }
 

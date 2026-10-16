@@ -1,9 +1,16 @@
+import { stayError, localDate } from '../utils/validation'
 import { useState } from 'react'
+import { useAccount, nights, P } from '../context/AccountContext'
+import { addDays } from '../utils/hotel'
+import { quoteStay } from '../utils/promotions'
 import useReveal from '../hooks/useReveal'
 
-const today = new Date().toISOString().slice(0, 10)
 
-export default function BookingForm() {
+
+export default function BookingForm({ onBook }) {
+  const { TYPES, roomsAvailable } = useAccount()
+  const [search, setSearch] = useState(null)
+  const today = localDate()
   const [checkIn, setCheckIn] = useState('')
   const [checkOut, setCheckOut] = useState('')
   const [adults, setAdults] = useState(2)
@@ -14,24 +21,43 @@ export default function BookingForm() {
   function handleCheckIn(e) {
     const val = e.target.value
     setCheckIn(val)
-    if (checkOut && checkOut < val) setCheckOut('')
+    setSearch(null)
+    setMessage('')
+    if (checkOut && checkOut <= val) setCheckOut('')
   }
 
   function handleCheckAvailability() {
-    if (checkIn && checkOut) {
-      setMessage(
-        `Demo only: ${adults} adult${adults !== 1 ? 's' : ''}` +
-          (children > 0 ? `, ${children} child${children !== 1 ? 'ren' : ''}` : '') +
-          `. Connect this form to your booking engine.`
-      )
-    } else {
-      setMessage('Please choose check-in and check-out dates.')
-    }
+    const selection = { in: checkIn, out: checkOut, adults, children }
+    const error = stayError(selection)
+    if (error) { setSearch(null); setMessage(error); return }
+    setMessage('')
+    setSearch(selection)
+  }
+
+  function updateSearchField(setter, value) {
+    setter(value)
+    setSearch(null)
+    setMessage('')
+  }
+
+  const matches = search ? TYPES.filter((t) =>
+    t.s >= search.adults + search.children &&
+    !stayError(search, { capacity: t.s }) &&
+    roomsAvailable(t.n, search.in, search.out) > 0
+  ).map((t) => ({ type: t, quote: quoteStay(t, search.in, search.out) })).filter((item) => !item.quote.error) : []
+
+  function chooseRoom(type) {
+    if (!search) return
+    const error = stayError(search, { capacity: type.s })
+    if (error) return setMessage(error)
+    if (roomsAvailable(type.n, search.in, search.out) <= 0) return setMessage('This room is no longer available. Please choose another room or different dates.')
+    if (typeof onBook !== 'function') return setMessage('Booking is temporarily unavailable. Please try again.')
+    onBook({ ...search, type: type.n })
   }
 
   return (
     <div className="wrap reveal book-wrap" ref={ref}>
-      <form className="book" id="book" onSubmit={(e) => e.preventDefault()}>
+      <form className="book" id="book" onSubmit={(e) => { e.preventDefault(); handleCheckAvailability() }}>
         <div>
           <label htmlFor="ci">Check-in</label>
           <input id="ci" type="date" min={today} value={checkIn} onChange={handleCheckIn} />
@@ -42,9 +68,9 @@ export default function BookingForm() {
           <input
             id="co"
             type="date"
-            min={checkIn || today}
+            min={checkIn ? addDays(checkIn, 1) : addDays(today, 1)}
             value={checkOut}
-            onChange={(e) => setCheckOut(e.target.value)}
+            onChange={(e) => updateSearchField(setCheckOut, e.target.value)}
           />
         </div>
 
@@ -55,14 +81,14 @@ export default function BookingForm() {
             <div className="stepper-btns">
               <button
                 type="button"
-                onClick={() => setAdults((a) => Math.min(a + 1, 50))}
+                onClick={() => updateSearchField(setAdults, Math.min(adults + 1, 50))}
                 aria-label="Add adult"
               >
                 +
               </button>
               <button
                 type="button"
-                onClick={() => setAdults((a) => Math.max(a - 1, 1))}
+                onClick={() => updateSearchField(setAdults, Math.max(adults - 1, 1))}
                 aria-label="Remove adult"
               >
                 −
@@ -78,14 +104,14 @@ export default function BookingForm() {
             <div className="stepper-btns">
               <button
                 type="button"
-                onClick={() => setChildren((c) => Math.min(c + 1, 50))}
+                onClick={() => updateSearchField(setChildren, Math.min(children + 1, 50))}
                 aria-label="Add child"
               >
                 +
               </button>
               <button
                 type="button"
-                onClick={() => setChildren((c) => Math.max(c - 1, 0))}
+                onClick={() => updateSearchField(setChildren, Math.max(children - 1, 0))}
                 aria-label="Remove child"
               >
                 −
@@ -94,17 +120,45 @@ export default function BookingForm() {
           </div>
         </div>
 
-        <button className="btn" id="chk" type="button" onClick={handleCheckAvailability}>
+        <button className="btn" id="chk" type="submit">
           Check availability
         </button>
       </form>
 
       <p
         id="msg"
+        role="alert"
         style={{ textAlign: 'center', color: 'var(--acc)', minHeight: 24, margin: '10px 0 0' }}
       >
         {message}
       </p>
+      {search && (
+        <div aria-labelledby="availability-title" style={{ marginTop: 24 }}>
+          <h2 id="availability-title">Available rooms</h2>
+          <p role="status" aria-live="polite" className="acc-muted">
+            {search.in} → {search.out} · {nights(search.in, search.out)} night(s) · {search.adults} adult(s), {search.children} child(ren) · {matches.length} room type(s) available
+          </p>
+          {matches.length === 0 ? (
+            <div className="acc-empty">No rooms available for these dates. Please try different dates or fewer guests.</div>
+          ) : <>
+            <p className="acc-muted acc-small">Choose a room to sign in or create an account. Your selection will be carried over. Availability is checked again before booking.</p>
+            <div className="acc-room-grid">
+              {matches.map(({ type, quote }) => (
+                <article className="acc-room-card" key={type.n}>
+                  <img className="acc-room-photo" src={type.img || '/room-1.jpg'} alt={type.n} style={{ width: '100%', objectFit: 'cover', display: 'block' }} />
+                  <h3>{type.n}</h3>
+                  <p className="acc-muted acc-small">{type.d || type.desc}</p>
+                  <p className="acc-muted acc-small">Sleeps {type.s} · {nights(search.in, search.out)} night(s)</p>
+                  <div className="acc-room-footer">
+                    <div><span className="acc-price">{P(quote.rate)}</span><span className="acc-muted"> /night</span><div className="acc-muted acc-small">{P(quote.total)} total</div></div>
+                    <button type="button" className="btn" onClick={() => chooseRoom(type)}>Book now</button>
+                  </div>
+                </article>
+              ))}
+            </div>
+          </>}
+        </div>
+      )}
     </div>
   )
 }

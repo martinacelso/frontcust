@@ -12,9 +12,9 @@ const TABS = [
   ['me', 'Profile'],
 ]
 
-export default function AccountPage() {
+export default function AccountPage({ bookingIntent = null, clearBookingIntent = () => {} }) {
   const { user, signOut } = useAccount()
-  const [tab, setTab] = useState('home')
+  const [tab, setTab] = useState(bookingIntent ? 'book' : 'home')
   const [signOutOpen, setSignOutOpen] = useState(false)
 
   if (!user) return null
@@ -43,7 +43,7 @@ export default function AccountPage() {
 
       <div className="wrap acc-main">
         {tab === 'home' && <HomeTab onNavigate={setTab} />}
-        {tab === 'book' && <BookTab />}
+        {tab === 'book' && <BookTab initialSearch={bookingIntent} onBooked={clearBookingIntent} />}
         {tab === 'trips' && <TripsTab />}
         {tab === 'me' && <ProfileTab />}
       </div>
@@ -69,6 +69,7 @@ export default function AccountPage() {
                 className="btn"
                 onClick={() => {
                   setSignOutOpen(false)
+                  clearBookingIntent()
                   signOut()
                 }}
               >

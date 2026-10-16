@@ -1,15 +1,16 @@
 import { useState } from 'react'
 import { useAdmin, T, sd, P } from '../../context/AdminContext'
+import { netReceipts } from '../../utils/reporting'
 import Timeline from './Timeline'
 import QuickCheckIn from './QuickCheckIn'
 
 export default function Dashboard() {
-  const { user, rooms, bookings, paid } = useAdmin()
+  const { rooms, bookings, free, can } = useAdmin()
   const [tab, setTab] = useState('timeline')
 
   const today = T()
   const totalRooms = rooms.length
-  const availableRooms = rooms.filter((r) => r.status === 'available').length
+  const availableRooms = rooms.filter((r) => r.status === 'available' && free(r, today, sd(1))).length
   const occupiedRooms = rooms.filter((r) => r.status === 'occupied').length
 
   const active = bookings.filter((b) => b.st !== 'cancelled')
@@ -18,29 +19,24 @@ export default function Dashboard() {
     (b) => b.out === today && b.st !== 'confirmed'
   ).length
   const totalBookings = active.length
-  const revenue = active.reduce((s, b) => s + paid(b), 0)
+  const revenue = netReceipts(bookings)
 
   const days = []
   for (let i = -6; i <= 0; i++) {
     const d = sd(i)
-    let dayTotal = 0
-    bookings.forEach((b) => {
-      b.pays.forEach((p) => {
-        if (p.d === d) dayTotal += p.a
-      })
-    })
+    const dayTotal = netReceipts(bookings, d, d)
     days.push({ label: d.slice(5), value: dayTotal })
   }
-  const max = Math.max(...days.map((d) => d.value), 1)
+  const max = Math.max(...days.map((d) => Math.abs(d.value)), 1)
 
   const stats = [
     [totalRooms, 'Total rooms'],
     [availableRooms, 'Available rooms'],
     [occupiedRooms, 'Occupied rooms'],
-    [arrivalsToday, "Today's check-ins"],
-    [departuresToday, "Today's check-outs"],
+    [arrivalsToday, "Scheduled arrivals today"],
+    [departuresToday, "Scheduled departures today"],
     [totalBookings, 'Total bookings'],
-    [P(revenue), 'Revenue (collected)'],
+    ...(can('bill') || can('rep') ? [[P(revenue), 'Net receipts']] : []),
   ]
 
   return (
@@ -56,7 +52,7 @@ export default function Dashboard() {
       </div>
 
       {/* Timeline + quick check-in/out tabs */}
-      <div className="admin-tabs" style={{ marginTop: 22 }}>
+      {(can('book') || can('chk')) && <div className="admin-tabs" style={{ marginTop: 22 }}>
         <button
           className={`admin-btn ${tab === 'timeline' ? '' : 's'}`}
           onClick={() => setTab('timeline')}
@@ -69,29 +65,31 @@ export default function Dashboard() {
         >
           Quick Check-in / out
         </button>
-      </div>
+      </div>}
 
-      {tab === 'timeline' && <Timeline />}
+      {can('book') && tab === 'timeline' && <Timeline />}
 
-      {tab === 'quick' && (
+      {can('chk') && tab === 'quick' && (
         <div className="admin-card">
           <QuickCheckIn />
         </div>
       )}
 
       {/* Revenue chart */}
-      <h2 className="admin-h2">Revenue – last 7 days</h2>
+      {(can('bill') || can('rep')) && <>
+      <h2 className="admin-h2">Net receipts – last 7 days</h2>
       <div className="admin-card">
         <div className="admin-bars">
           {days.map((d) => (
             <div className="admin-bar" key={d.label}>
-              <i style={{ height: Math.round((d.value / max) * 90) + 'px' }} />
+              <i style={{ height: Math.round((Math.abs(d.value) / max) * 90) + 'px', background: d.value < 0 ? '#b23b3b' : undefined }} />
               <span className="admin-bar-value">{P(d.value)}</span>
               <span className="admin-bar-label">{d.label}</span>
             </div>
           ))}
         </div>
       </div>
+      </>}
     </>
   )
 }
