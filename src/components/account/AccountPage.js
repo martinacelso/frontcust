@@ -16,6 +16,8 @@ export default function AccountPage({ bookingIntent = null, clearBookingIntent =
   const { user, signOut } = useAccount()
   const [tab, setTab] = useState(bookingIntent ? 'book' : 'home')
   const [signOutOpen, setSignOutOpen] = useState(false)
+  const [signOutError, setSignOutError] = useState('')
+  const [signOutBusy, setSignOutBusy] = useState(false)
 
   if (!user) return null
 
@@ -55,6 +57,7 @@ export default function AccountPage({ bookingIntent = null, clearBookingIntent =
             onClick={(e) => e.stopPropagation()}
           >
             <h3>Sign out?</h3>
+            {signOutError && <p role="alert">{signOutError}</p>}
             <p className="acc-muted">
               You'll need to sign in again to access your bookings and profile.
             </p>
@@ -67,10 +70,15 @@ export default function AccountPage({ bookingIntent = null, clearBookingIntent =
               </button>
               <button
                 className="btn"
-                onClick={() => {
+                disabled={signOutBusy}
+                onClick={async () => {
+                  setSignOutBusy(true)
+                  setSignOutError('')
+                  const result = await signOut()
+                  setSignOutBusy(false)
+                  if (result.error) return setSignOutError(result.error)
                   setSignOutOpen(false)
                   clearBookingIntent()
-                  signOut()
                 }}
               >
                 Yes, sign out

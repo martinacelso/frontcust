@@ -1,5 +1,5 @@
 import { emailError, textError } from '../utils/validation'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useAuth } from '../hooks/useAuth'
 
 export default function AuthModal({ isOpen, onClose }) {
@@ -9,6 +9,8 @@ export default function AuthModal({ isOpen, onClose }) {
 function AuthDialog({ onClose }) {
   const { handleSignIn, handleSignUp } = useAuth()
 
+  const pending = useRef(false)
+  const [busy, setBusy] = useState(false)
   const [mode, setMode] = useState('signin') // 'signin' | 'signup' | 'reset'
   const [firstName, setFirstName] = useState('')
   const [lastName, setLastName] = useState('')
@@ -47,12 +49,18 @@ function AuthDialog({ onClose }) {
   }
 
   function switchMode(next) {
+    if (pending.current) return
     reset()
     setMode(next)
   }
 
-  function handleSubmit(e) {
+  async function handleSubmit(e) {
     e.preventDefault()
+    if (pending.current) return
+    pending.current = true
+    setBusy(true)
+    setMessage('')
+    try {
     const error = emailError(email)
     if (error) return setMessage(error)
 
@@ -64,18 +72,20 @@ function AuthDialog({ onClose }) {
     if (!email || !password) return setMessage('Please fill in all fields.')
 
     if (mode === 'signin') {
-      const result = handleSignIn(email.trim().toLowerCase(), password)
+      const result = await handleSignIn(email.trim().toLowerCase(), password)
       if (result.error) return setMessage(result.error)
       reset()
       onClose()
       return
     }
 
+    if (password.length < 8 || new TextEncoder().encode(password).length > 72) return setMessage('Use at least 8 characters and at most 72 UTF-8 bytes for your password.')
+
     // signup — guests only
     if (textError(firstName, 'First name') || textError(lastName, 'Last name')) {
       return setMessage('Please enter your first and last name.')
     }
-    const result = handleSignUp({
+    const result = await handleSignUp({
       name: `${firstName.trim()} ${lastName.trim()}`,
       email: email.trim().toLowerCase(),
       password,
@@ -87,6 +97,12 @@ function AuthDialog({ onClose }) {
     setMode('signin')
     setEmail(registeredEmail)
     setNotification('Your account is ready. Please sign in with your email and password.')
+    } catch {
+      setMessage('Unable to reach the server. Please try again.')
+    } finally {
+      pending.current = false
+      setBusy(false)
+    }
   }
 
   const heading =
@@ -97,7 +113,7 @@ function AuthDialog({ onClose }) {
       ? 'Welcome back. Enter your details to continue.'
       : mode === 'signup'
       ? 'Join Twin Lakes Hotel for exclusive rates and offers.'
-      : "We'll email you a link to reset your password."
+      : "Password reset by email is not available yet."
 
   const buttonLabel =
     mode === 'signin' ? 'SIGN IN' : mode === 'signup' ? 'CREATE ACCOUNT' : 'SEND RESET LINK'
@@ -219,7 +235,7 @@ function AuthDialog({ onClose }) {
               </div>
             )}
 
-            <button type="submit" className="auth-submit">{buttonLabel}</button>
+            <button type="submit" className="auth-submit" disabled={busy}>{busy ? 'Please wait…' : buttonLabel}</button>
 
             {message && <p className="auth-msg" role="alert">{message}</p>}
           </form>

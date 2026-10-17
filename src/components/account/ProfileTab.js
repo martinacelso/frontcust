@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useRef } from 'react'
 import { useAccount, nights, P } from '../../context/AccountContext'
 
 import { phMobileError } from '../../utils/validation'
@@ -7,6 +7,10 @@ import { hotelDate } from '../../utils/hotel'
 export default function ProfileTab() {
   const { user, updateProfile, changePassword, myBookings } = useAccount()
 
+  const saveLock = useRef(false)
+  const [busy, setBusy] = useState(false)
+  const [profilePassword, setProfilePassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
   const [draft, setDraft] = useState({})
   const name = draft.name ?? user.name
   const email = draft.email ?? user.email
@@ -46,28 +50,40 @@ export default function ProfileTab() {
   )
   const memberSince = user.createdAt ? hotelDate(user.createdAt).slice(0, 4) : '—'
 
-  function handleSaveProfile() {
+  async function handleSaveProfile() {
+    if (saveLock.current) return
     setSaved(false)
     setPhoneTouched(true)
     setProfileError('')
     const phoneIssue = phMobileError(phone)
     if (phoneIssue) return setProfileError(phoneIssue)
-    const result = updateProfile({
+    saveLock.current = true
+    setBusy(true)
+    try {
+    const result = await updateProfile({
+      currentPassword: profilePassword,
       name: name.trim(),
       email: email.trim().toLowerCase(),
       contactEmail: contactEmail.trim().toLowerCase(),
       phone: phone.trim(),
     })
     if (result?.error) return setProfileError(result.error)
+    setProfilePassword('')
     setDraft({})
     setSaved(true)
     setTimeout(() => setSaved(false), 2200)
+    } finally { saveLock.current = false; setBusy(false) }
   }
 
-  function handleChangePassword() {
+  async function handleChangePassword() {
+    if (saveLock.current) return
     setPwError('')
     setPwSaved(false)
-    const result = changePassword(current, next)
+    if (next !== confirmPassword) return setPwError('New passwords do not match.')
+    saveLock.current = true
+    setBusy(true)
+    try {
+    const result = await changePassword(current, next)
     if (result.error) {
       setPwError(result.error)
       return
@@ -75,7 +91,9 @@ export default function ProfileTab() {
     setPwSaved(true)
     setCurrent('')
     setNext('')
+    setConfirmPassword('')
     setTimeout(() => setPwSaved(false), 2200)
+    } finally { saveLock.current = false; setBusy(false) }
   }
 
   return (
@@ -143,6 +161,10 @@ export default function ProfileTab() {
                 />
               </div>
 
+              {email.trim().toLowerCase() !== user.email && <div>
+                <label htmlFor="profile-current-password">Current password to change login email</label>
+                <input id="profile-current-password" type="password" autoComplete="current-password" value={profilePassword} onChange={(e) => setProfilePassword(e.target.value)} />
+              </div>}
               <div>
                 <label>Contact email</label>
                 <input type="email" value={contactEmail} onChange={(e) => setContactEmail(e.target.value)} />
@@ -169,7 +191,7 @@ export default function ProfileTab() {
             </div>
 
             <div className="acc-form-footer">
-              <button className="btn" onClick={handleSaveProfile}>
+              <button className="btn" disabled={busy} onClick={handleSaveProfile}>
                 Save changes
               </button>
               {profileError && <p className="acc-error" role="alert">{profileError}</p>}
@@ -181,7 +203,7 @@ export default function ProfileTab() {
             <div className="profile-card-header">
               <h3>Change password</h3>
               <p className="acc-muted acc-small">
-                Use at least 6 characters. Avoid reusing passwords from other sites.
+                Use at least 8 characters (maximum 72 UTF-8 bytes). Avoid reusing passwords from other sites.
               </p>
             </div>
 
@@ -190,7 +212,6 @@ export default function ProfileTab() {
                 <label>Current password</label>
                 <input
                   type="password"
-                  maxLength={20}
                   value={current}
                   onChange={(e) => setCurrent(e.target.value)}
                 />
@@ -200,18 +221,21 @@ export default function ProfileTab() {
                 <label>New password</label>
                 <input
                   type="password"
-                  maxLength={20}
                   value={next}
                   onChange={(e) => setNext(e.target.value)}
                 />
               </div>
             </div>
 
+            <div className="profile-form"><div>
+              <label htmlFor="confirm-new-password">Confirm new password</label>
+              <input id="confirm-new-password" type="password" autoComplete="new-password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} />
+            </div></div>
             {pwError && <p className="acc-error">{pwError}</p>}
-            {pwSaved && <p className="acc-saved">✓ Password updated</p>}
+            {pwSaved && <p className="acc-saved">✓ Password updated. Other sessions have been signed out.</p>}
 
             <div className="acc-form-footer">
-              <button className="btn" onClick={handleChangePassword}>
+              <button className="btn" disabled={busy} onClick={handleChangePassword}>
                 Update password
               </button>
             </div>

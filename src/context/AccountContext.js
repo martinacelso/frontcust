@@ -1,6 +1,7 @@
 import { cancelError } from '../utils/actionValidation'
-import { profileError, passwordError, emailError, phMobileError, normalizePhMobile, emailKey, stayError, localDate } from '../utils/validation'
-import { createContext, useContext, useState } from 'react'
+import { stayError, localDate } from '../utils/validation'
+import { createContext, useContext, useState, useEffect } from 'react'
+import { authRequest } from '../utils/api'
 import { useAdmin, refOf } from './AdminContext'
 
 import { ROOM_TYPES } from '../utils/catalog'
@@ -26,26 +27,42 @@ export const PAYMENT_METHODS = ['GCash', 'Maya', 'Card', 'Bank transfer']
 // ---- room types ----
 export const TYPES = ROOM_TYPES
 
-// ---- seed data ----
-// Guest accounts only. Bookings and guest records live in AdminContext so the
-// front desk / admin side and the guest side always see the same data.
-const seedUsers = [
-  { id: 1, guestId: 1, createdAt: '2024-01-01T00:00:00Z', name: 'Maria Santos', email: 'maria@mail.com', phone: '0917 111 2233', pw: 'guest123' },
-]
-
 export function AccountProvider({ children }) {
   const {
-    bookings, setBookings, guests, setGuests, types, staff, roomsAvailable, saveReservation, getRoomType, refunded,
+    bookings, setBookings, setGuests, types, roomsAvailable, saveReservation, getRoomType, refunded,
     total, paid, nextId, logAction,
   } = useAdmin()
 
-  // In-memory for now: replace with backend calls (fetch/API) when the server is ready
-  const [userId, setUserId] = useState(null)
-  const [users, setUsers] = useState(seedUsers)
+  const [user, setUser] = useState(null)
+  const [authLoading, setAuthLoading] = useState(true)
+  const [authError, setAuthError] = useState('')
   const [promo, setPromo] = useState(null)
-  const identity = users.find((u) => u.id === userId)
-  const profile = identity && guests.find((g) => g.id === identity.guestId)
-  const user = identity && profile ? { ...identity, name: profile.name, phone: profile.phone || '', contactEmail: profile.email } : null
+  const users = user ? [user] : []
+
+  // Temporary bridge to the existing in-memory booking screens. Account IDs
+  // come from MongoDB; never associate accounts by matching guest email.
+  const acceptUser = (account) => {
+    const mapped = { ...account, guestId: account.id, contactEmail: account.contactEmail || account.email }
+    setGuests((prev) => [...prev.filter((g) => g.id !== account.id), {
+      id: account.id, userId: account.id, name: account.name,
+      email: account.contactEmail || account.email, phone: account.phone || '',
+    }])
+    setUser(mapped)
+  }
+
+  useEffect(() => {
+    let active = true
+    authRequest('/me').then((result) => {
+      if (!active) return
+      if (result.status === 401) setUser(null)
+      else if (result.error) setAuthError(result.error)
+      else acceptUser(result.user)
+      setAuthLoading(false)
+    })
+    return () => { active = false }
+    // Restore the session once when this provider mounts.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // Convert a shared (admin-shaped) booking into what the guest screens expect
   const toAccount = (b) => ({
@@ -68,51 +85,35 @@ export function AccountProvider({ children }) {
     payRef: b.pays && b.pays.length ? b.pays[0].ref : undefined,
   })
 
-  const signIn = (email, password) => {
-    const u = users.find((x) => emailKey(x.email) === emailKey(email) && x.pw === password)
-    if (!u) return false
-    setUserId(u.id)
-    return true
-  }
-
-  const signUp = (data) => {
-    const error = profileError(data, users) || passwordError(data.password)
-    if (error) return { error }
-    data = { ...data, name: data.name.trim(), email: emailKey(data.email), phone: (data.phone || '').trim() }
-    if (users.some((u) => u.email === data.email)) return { error: 'An account with this email already exists.' }
-    if (data.password.length < 6) return { error: 'Password must be at least 6 characters.' }
-
-    if (staff.some((s) => emailKey(s.email) === data.email)) return { error: 'This email is already in use.' }
-    // Never claim a walk-in guest record based on an unverified email match.
-    const id = nextId()
-    const guestId = nextId()
-    setGuests((prev) => [...prev, { id: guestId, userId: id, name: data.name, email: data.email, phone: data.phone }])
-    const u = { id, guestId, email: data.email, pw: data.password, createdAt: new Date().toISOString() }
-    setUsers((prev) => [...prev, u])
+  const signIn = async (email, password) => {
+    const result = await authRequest('/login', { email, password })
+    if (result.error) return result
+    acceptUser(result.user)
+    setAuthError('')
     return { ok: true }
   }
 
-  const signOut = () => setUserId(null)
+  const signUp = (data) => authRequest('/signup', {
+    name: data.name, email: data.email, password: data.password, phone: data.phone || '',
+  })
 
-  const updateProfile = (data) => {
-    if (!user) return { error: 'Please sign in again.' }
-    const error = phMobileError(data.phone) || profileError(data, [...users, ...staff.map((s) => ({ ...s, id: `staff-${s.id}` }))], user.id) || emailError(data.contactEmail ?? user.contactEmail)
-    if (error) return { error }
-    data = { name: data.name.trim(), email: emailKey(data.email), phone: normalizePhMobile(data.phone), contactEmail: emailKey(data.contactEmail ?? user.contactEmail) }
-    setUsers((prev) => prev.map((x) => (x.id === user.id ? { ...x, ...data } : x)))
-    setGuests((prev) => prev.map((g) => (g.id === user.guestId ? { ...g, name: data.name, phone: data.phone, email: data.contactEmail } : g)))
+  const signOut = async () => {
+    const result = await authRequest('/logout', {})
+    if (result.error) return result
+    setUser(null)
+    setPromo(null)
+    return { ok: true }
   }
 
-  const changePassword = (current, next) => {
-    if (!user) return { error: 'Please sign in again.' }
-    const error = passwordError(next)
-    if (error) return { error }
-    if (next === current) return { error: 'Choose a different new password.' }
-    if (current !== user.pw) return { error: 'Current password is incorrect.' }
-    if (next.length < 6) return { error: 'New password must be at least 6 characters.' }
-    if (next.length > 20) return { error: 'New password must be 20 characters or fewer.' }
-    setUsers((prev) => prev.map((x) => (x.id === user.id ? { ...x, pw: next } : x)))
-    return { ok: true }
+  const updateProfile = async (data) => {
+    const result = await authRequest('/profile', data)
+    if (!result.error) acceptUser(result.user)
+    return result
+  }
+  const changePassword = async (currentPassword, newPassword) => {
+    const result = await authRequest('/password', { currentPassword, newPassword })
+    if (!result.error) acceptUser(result.user)
+    return result
   }
 
   // Creates a booking in the shared store so the front desk / admin see it immediately.
@@ -190,7 +191,7 @@ export function AccountProvider({ children }) {
       .sort((a, b) => (a.in < b.in ? 1 : -1))
 
   const value = {
-    user, users, bookings,
+    user, users, bookings, authLoading, authError,
     signIn, signUp, signOut, updateProfile, changePassword,
     addBooking, cancelBooking, myBookings, roomsAvailable,
     promo, setPromo,

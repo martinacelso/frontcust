@@ -24,11 +24,14 @@ function Shell() {
   const [bookingIntent, setBookingIntent] = useState(null)
   const clearBookingIntent = () => setBookingIntent(null)
   const continueBooking = (selection) => { setBookingIntent(selection); setAuthOpen(true) }
-  const { user: guestUser, signIn: guestSignIn, signUp: guestSignUp } = useAccount()
+  const { user: guestUser, signIn: guestSignIn, signUp: guestSignUp, authLoading, authError } = useAccount()
   const { user: staffUser, login: staffLogin, logout: staffLogout } = useAdmin()
 
   const openAuth = () => setAuthOpen(true)
   const closeAuth = () => setAuthOpen(false)
+
+  if (authLoading) return <main className="wrap" role="status">Loading your account…</main>
+  if (authError) return <main className="wrap" role="alert"><p>{authError}</p><button className="btn" onClick={() => window.location.reload()}>Try again</button></main>
 
   // ---- Signed in as staff → admin interface ----
   if (staffUser) {
@@ -42,10 +45,10 @@ function Shell() {
 
   // ---- Not signed in → public site ----
   // Try staff login first, then guest login
-  const handleSignIn = (email, password) => {
+  const handleSignIn = async (email, password) => {
     if (staffLogin(email, password)?.ok) { clearBookingIntent(); return { ok: true, role: 'staff' } }
-    if (guestSignIn(email, password)) return { ok: true, role: 'guest' }
-    return { error: 'Incorrect email or password.' }
+    const result = await guestSignIn(email, password)
+    return result.error ? result : { ok: true, role: 'guest' }
   }
 
   const handleSignUp = (data) => {
