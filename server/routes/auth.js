@@ -3,6 +3,7 @@ const bcrypt = require('bcryptjs');
 const { randomBytes, timingSafeEqual } = require('node:crypto');
 const { rateLimit } = require('express-rate-limit');
 const User = require('../models/User');
+const { authenticated, requireRoles } = require('../middleware/auth');
 
 const router = express.Router();
 const safeUser = (u) => ({
@@ -89,17 +90,6 @@ router.post('/login', limit(), async (req, res) => {
   res.json({ user: safeUser(user), csrfToken: req.session.csrfToken });
 });
 
-async function authenticated(req, res, next) {
-  const user = req.session.userId && await User.findById(req.session.userId).select('+passwordHash');
-  if (!user || !user.active || (req.session.sessionVersion || 0) !== (user.sessionVersion || 0)) {
-    await sessionAction(req, 'destroy');
-    res.clearCookie('frontcust.sid', { path: '/' });
-    return res.status(401).json({ error: 'Please sign in again.' });
-  }
-  req.account = user;
-  next();
-}
-
 const validEmail = (s) => typeof s === 'string' && s.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s);
 const validPassword = (s) => typeof s === 'string' && s.length >= 8 && Buffer.byteLength(s, 'utf8') <= 72;
 
@@ -166,4 +156,9 @@ router.post('/logout', async (req, res) => {
   res.json({ message: 'Signed out successfully.' });
 });
 
+router.get('/staff/me', authenticated, requireRoles('admin', 'front-desk', 'housekeeping'), (req, res) => {
+  res.json({ user: safeUser(req.account) });
+});
+
 module.exports = router;
+

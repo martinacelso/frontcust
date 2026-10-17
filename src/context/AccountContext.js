@@ -31,38 +31,23 @@ export function AccountProvider({ children }) {
   const {
     bookings, setBookings, setGuests, types, roomsAvailable, saveReservation, getRoomType, refunded,
     total, paid, nextId, logAction,
+    sessionUser, setSessionUser, authLoading, authError, login, logout,
   } = useAdmin()
 
-  const [user, setUser] = useState(null)
-  const [authLoading, setAuthLoading] = useState(true)
-  const [authError, setAuthError] = useState('')
   const [promo, setPromo] = useState(null)
+  const user = sessionUser?.role === 'guest'
+    ? { ...sessionUser, guestId: sessionUser.id, contactEmail: sessionUser.contactEmail || sessionUser.email } : null
   const users = user ? [user] : []
+  const acceptUser = setSessionUser
 
-  // Temporary bridge to the existing in-memory booking screens. Account IDs
-  // come from MongoDB; never associate accounts by matching guest email.
-  const acceptUser = (account) => {
-    const mapped = { ...account, guestId: account.id, contactEmail: account.contactEmail || account.email }
+  useEffect(() => {
+    if (sessionUser?.role !== 'guest') return
+    const account = sessionUser
     setGuests((prev) => [...prev.filter((g) => g.id !== account.id), {
       id: account.id, userId: account.id, name: account.name,
       email: account.contactEmail || account.email, phone: account.phone || '',
     }])
-    setUser(mapped)
-  }
-
-  useEffect(() => {
-    let active = true
-    authRequest('/me').then((result) => {
-      if (!active) return
-      if (result.status === 401) setUser(null)
-      else if (result.error) setAuthError(result.error)
-      else acceptUser(result.user)
-      setAuthLoading(false)
-    })
-    return () => { active = false }
-    // Restore the session once when this provider mounts.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [sessionUser, setGuests])
 
   // Convert a shared (admin-shaped) booking into what the guest screens expect
   const toAccount = (b) => ({
@@ -85,22 +70,15 @@ export function AccountProvider({ children }) {
     payRef: b.pays && b.pays.length ? b.pays[0].ref : undefined,
   })
 
-  const signIn = async (email, password) => {
-    const result = await authRequest('/login', { email, password })
-    if (result.error) return result
-    acceptUser(result.user)
-    setAuthError('')
-    return { ok: true }
-  }
+  const signIn = login
 
   const signUp = (data) => authRequest('/signup', {
     name: data.name, email: data.email, password: data.password, phone: data.phone || '',
   })
 
   const signOut = async () => {
-    const result = await authRequest('/logout', {})
+    const result = await logout()
     if (result.error) return result
-    setUser(null)
     setPromo(null)
     return { ok: true }
   }

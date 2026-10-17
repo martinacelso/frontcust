@@ -4,14 +4,18 @@ import { useAdmin } from '../../context/AdminContext'
 export default function AdminLogin() {
   const { login } = useAdmin()
 
-  const [email, setEmail] = useState('admin@twinlakes.ph')
-  const [password, setPassword] = useState('admin123')
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
   const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
 
-  function handleSubmit(e) {
+  async function handleSubmit(e) {
     e.preventDefault()
+    if (busy) return
+    setBusy(true)
     setError('')
-    const result = login(email.trim().toLowerCase(), password)
+    const result = await login(email.trim().toLowerCase(), password)
+    setBusy(false)
     if (result?.error) setError(result.error)
   }
 
@@ -41,7 +45,7 @@ export default function AdminLogin() {
 
         {error && <p className="admin-login-error">{error}</p>}
 
-        <button type="submit" className="admin-login-btn">Sign in</button>
+        <button type="submit" className="admin-login-btn" disabled={busy}>Sign in</button>
 
 
       </form>

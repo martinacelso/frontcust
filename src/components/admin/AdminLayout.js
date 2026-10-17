@@ -8,7 +8,6 @@ import CheckInModule from './CheckInModule'
 import BillingModule from './BillingModule'
 import HousekeepingModule from './HousekeepingModule'
 import ReportsModule from './ReportsModule'
-import StaffModule from './StaffModule'
 import AuditModule from './AuditModule'
 import AdminProfile from './AdminProfile'
 
@@ -17,6 +16,8 @@ export default function AdminLayout() {
   const [tab, setTab] = useState('dash')
   const [accountOpen, setAccountOpen] = useState(false)
   const [signOutOpen, setSignOutOpen] = useState(false)
+  const [signOutBusy, setSignOutBusy] = useState(false)
+  const [signOutError, setSignOutError] = useState('')
 
   if (!user) return null
 
@@ -33,7 +34,7 @@ export default function AdminLayout() {
       case 'bill': return <BillingModule />
       case 'hk': return <HousekeepingModule />
       case 'rep': return <ReportsModule />
-      case 'staff': return <StaffModule />
+      case 'staff': return <p className="admin-muted">Staff account management is not available yet. Your current administrator account is stored in MongoDB.</p>
       case 'audit': return <AuditModule />
       default: return null
     }
@@ -78,6 +79,7 @@ export default function AdminLayout() {
         <div className="acc-modal-overlay" onClick={() => setSignOutOpen(false)}>
           <div className="acc-modal signout-modal" onClick={(e) => e.stopPropagation()}>
             <h3>Sign out?</h3>
+            {signOutError && <p role="alert">{signOutError}</p>}
             <p className="acc-muted">
               You'll need to sign in again to access the admin panel.
             </p>
@@ -87,9 +89,14 @@ export default function AdminLayout() {
               </button>
               <button
                 className="btn"
-                onClick={() => {
+                disabled={signOutBusy}
+                onClick={async () => {
+                  setSignOutBusy(true)
+                  setSignOutError('')
+                  const result = await logout()
+                  setSignOutBusy(false)
+                  if (result.error) return setSignOutError(result.error)
                   setSignOutOpen(false)
-                  logout()
                 }}
               >
                 Yes, sign out

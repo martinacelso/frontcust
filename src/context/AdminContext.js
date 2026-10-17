@@ -1,5 +1,6 @@
-import { profileError, passwordError, emailKey, localDate } from '../utils/validation'
-import { createContext, useContext, useState, useRef } from 'react'
+import { authRequest } from '../utils/api'
+import { localDate } from '../utils/validation'
+import { createContext, useContext, useState, useRef, useEffect } from 'react'
 
 import { ROOM_TYPES } from '../utils/catalog'
 import { allocationPlan, availableRoomIds } from '../utils/inventory'
@@ -58,13 +59,6 @@ const seedBookings = [
   { id: 9, g: 1, room: 8, type: 'Premier King', in: sd(-200), out: sd(-199), st: 'checked-out', rate: 6800, extras: [], disc: 0, pays: [{ d: sd(-199), a: 6800, m: 'GCash' }], adults: 2, children: 0, gCount: 2, source: 'Online', requests: '' },
 ]
 
-const seedStaff = [
-  { id: 1, name: 'Ana Lim', email: 'admin@twinlakes.ph', pw: 'admin123', role: 'Admin', dept: 'Management', on: true },
-  { id: 2, name: 'Carlo Tan', email: 'desk@twinlakes.ph', pw: 'desk123', role: 'Front Desk', dept: 'Front Office', on: true },
-  { id: 3, name: 'Rosa Diaz', email: 'hk@twinlakes.ph', pw: 'hk123', role: 'Housekeeping', dept: 'Housekeeping', on: true },
-  { id: 4, name: 'Ben Cruz', email: 'ben@twinlakes.ph', pw: 'x', role: 'Manager', dept: 'Operations', on: true },
-]
-
 const seedPerms = {
   Admin: ['dash', 'rooms', 'book', 'guests', 'chk', 'bill', 'hk', 'rep', 'staff', 'audit'],
   Manager: ['dash', 'rooms', 'book', 'guests', 'chk', 'bill', 'hk', 'rep'],
@@ -111,12 +105,28 @@ export function AdminProvider({ children }) {
     bookingRef.current = next
     rawSetBookings(next)
   }
-  const [staff, setStaff] = useState(seedStaff)
+  const [staff, setStaff] = useState([])
   const [perms, setPerms] = useState(seedPerms)
   const uid = useRef(100)
   const [logs, setLogs] = useState([])
-  const [userId, setUserId] = useState(null)
-  const user = staff.find((s) => s.id === userId && s.on) || null
+  const [sessionUser, setSessionUser] = useState(null)
+  const [authLoading, setAuthLoading] = useState(true)
+  const [authError, setAuthError] = useState('')
+  const roleLabels = { admin: 'Admin', 'front-desk': 'Front Desk', housekeeping: 'Housekeeping' }
+  const user = sessionUser && roleLabels[sessionUser.role]
+    ? { ...sessionUser, role: roleLabels[sessionUser.role], on: true, dept: roleLabels[sessionUser.role] } : null
+
+  useEffect(() => {
+    let active = true
+    authRequest('/me').then((result) => {
+      if (!active) return
+      if (result.status === 401) setSessionUser(null)
+      else if (result.error) setAuthError(result.error)
+      else setSessionUser(result.user)
+      setAuthLoading(false)
+    })
+    return () => { active = false }
+  }, [])
 
   const nextId = () => {
     return ++uid.current
@@ -138,7 +148,7 @@ export function AdminProvider({ children }) {
 
   // ---- helpers ----
   const can = (moduleId) =>
-    user && perms[user.role] && perms[user.role].indexOf(moduleId) > -1
+    user && seedPerms[user.role]?.includes(moduleId)
 
   const by = (collection, id) => {
     const map = { rooms: roomRef.current, guests, bookings: bookingRef.current, staff, types: typeRef.current }
@@ -202,41 +212,31 @@ export function AdminProvider({ children }) {
     return { ok: true }
   }
 
-  // ---- auth ----
-  const login = (email, password) => {
-    const u = staff.filter((s) => emailKey(s.email) === emailKey(email) && s.pw === password)[0]
-    if (!u) return { error: 'Invalid email or password.' }
-    if (!u.on) return { error: 'This account is disabled.' }
-    setUserId(u.id)
-    setLogs((prev) =>
-      [
-        {
-          id: Date.now() + Math.random(),
-          at: new Date().toISOString(),
-          actor: u.name,
-          role: u.role,
-          action: 'Logged in',
-          target: 'Admin panel',
-          details: `Signed in as ${u.role}`,
-        },
-        ...prev,
-      ].slice(0, 500)
-    )
+  // Authentication is shared by staff and guests; no local password fallback.
+  const login = async (email, password) => {
+    const result = await authRequest('/login', { email, password })
+    if (result.error) return result
+    setSessionUser(result.user)
+    setAuthError('')
+    return { ok: true, role: result.user.role }
+  }
+  const logout = async () => {
+    const result = await authRequest('/logout', {})
+    if (result.error) return result
+    setSessionUser(null)
     return { ok: true }
   }
-
-  const logout = () => setUserId(null)
-
-  const updateSelf = (data) => {
-    if (!user) return { error: 'Please sign in again.' }
-    const error = data.pw !== undefined ? passwordError(data.pw) || (data.pw === user.pw ? 'Choose a different new password.' : '') : profileError(data, staff, user.id)
-    if (error) return { error }
-    data = data.pw !== undefined ? { pw: data.pw } : { name: data.name.trim(), email: emailKey(data.email), phone: (data.phone || '').trim() }
-    setStaff((prev) => prev.map((s) => (s.id === user.id ? { ...s, ...data } : s)))
+  const updateSelf = async (data) => {
+    const result = data.pw !== undefined
+      ? await authRequest('/password', { currentPassword: data.currentPassword, newPassword: data.pw })
+      : await authRequest('/profile', { ...data, contactEmail: sessionUser.contactEmail || sessionUser.email })
+    if (!result.error) setSessionUser(result.user)
+    return result
   }
 
   const value = {
     types, rooms, guests, bookings, staff, perms, user, logs,
+    sessionUser, setSessionUser, authLoading, authError,
     setTypes, setRooms, setGuests, setBookings, setStaff, setPerms,
     can, by, rate, sum, total, paid, free, nextId, logAction,
     login, logout, updateSelf, checkIn, checkOut, roomsAvailable, saveReservation, getRoomType, collected, refunded, balanceDue,

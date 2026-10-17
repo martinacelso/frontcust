@@ -6,6 +6,9 @@ const session = require('express-session');
 const { MongoStore } = require('connect-mongo');
 const User = require('./models/User');
 const authRoutes = require('./routes/auth');
+const roomRoutes = require('./routes/rooms');
+const RoomType = require('./models/RoomType');
+const Room = require('./models/Room');
 
 async function startServer() {
   if (!process.env.MONGODB_URI) throw new Error('Set MONGODB_URI in server/.env.');
@@ -16,7 +19,7 @@ async function startServer() {
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Invalid PORT.');
 
   await mongoose.connect(process.env.MONGODB_URI, { serverSelectionTimeoutMS: 5000 });
-  await User.init(); // Wait for the unique email index before accepting signups.
+  await Promise.all([User.init(), RoomType.init(), Room.init()]); // Wait for the unique email index before accepting signups.
   console.log('MongoDB connected');
 
   const app = express();
@@ -44,6 +47,7 @@ async function startServer() {
       secure: process.env.NODE_ENV === 'production', maxAge: 8 * 60 * 60 * 1000, path: '/' },
   }));
   app.use('/api/auth', authRoutes);
+  app.use('/api/rooms', roomRoutes);
   app.use('/api', (req, res) => res.status(404).json({ error: 'Endpoint not found.' }));
   app.use((error, req, res, next) => {
     if (res.headersSent) return next(error);
@@ -65,3 +69,4 @@ startServer().catch((error) => {
   console.error('Startup failed:', error.name, error.code || 'Check MongoDB and server/.env settings.');
   process.exit(1);
 });
+

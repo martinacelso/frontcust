@@ -1,9 +1,12 @@
-import { useState } from 'react'
+import { useState, useRef } from 'react'
 import { useAdmin } from '../../context/AdminContext'
 
 export default function AdminProfile({ onClose }) {
   const { user, updateSelf } = useAdmin()
 
+  const lock = useRef(false)
+  const [busy, setBusy] = useState(false)
+  const [emailPassword, setEmailPassword] = useState('')
   const [name, setName] = useState(user.name)
   const [email, setEmail] = useState(user.email)
   const [phone, setPhone] = useState(user.phone || '')
@@ -24,32 +27,42 @@ export default function AdminProfile({ onClose }) {
     .join('')
     .toUpperCase()
 
-  const memberSince = '2024'
+  const memberSince = user.createdAt ? new Date(user.createdAt).getFullYear() : '—'
 
-  function handleSaveProfile() {
+  async function handleSaveProfile() {
+    if (lock.current) return
     setSaved(false)
     setProfileError('')
-    const result = updateSelf({
+    lock.current = true
+    setBusy(true)
+    const result = await updateSelf({
+      currentPassword: emailPassword,
       name: name.trim(),
       email: email.trim().toLowerCase(),
       phone: phone.trim(),
     })
+    lock.current = false
+    setBusy(false)
     if (result?.error) return setProfileError(result.error)
+    setEmailPassword('')
     setSaved(true)
     setTimeout(() => setSaved(false), 2200)
   }
 
-  function handleChangePassword() {
+  async function handleChangePassword() {
+    if (lock.current) return
     setPwError('')
     setPwSaved(false)
 
     if (!current) return setPwError('Please enter your current password.')
-    if (current !== user.pw) return setPwError('Current password is incorrect.')
-    if (next.length < 6) return setPwError('New password must be at least 6 characters.')
-    if (next.length > 20) return setPwError('New password must be 20 characters or fewer.')
+    if (next.length < 8) return setPwError('New password must be at least 8 characters.')
     if (next !== confirm) return setPwError('New passwords do not match.')
 
-    const result = updateSelf({ pw: next })
+    lock.current = true
+    setBusy(true)
+    const result = await updateSelf({ pw: next, currentPassword: current })
+    lock.current = false
+    setBusy(false)
     if (result?.error) return setPwError(result.error)
     setCurrent('')
     setNext('')
@@ -119,8 +132,12 @@ export default function AdminProfile({ onClose }) {
                   />
                 </div>
 
+                {email.trim().toLowerCase() !== user.email && <div>
+                  <label htmlFor="staff-email-password">Current password to change email</label>
+                  <input id="staff-email-password" type="password" autoComplete="current-password" value={emailPassword} onChange={(e) => setEmailPassword(e.target.value)} />
+                </div>}
                 <div>
-                  <label>Phone</label>
+                  <label>Philippine mobile number</label>
                   <input
                     value={phone}
                     onChange={(e) => setPhone(e.target.value)}
@@ -130,7 +147,7 @@ export default function AdminProfile({ onClose }) {
               </div>
 
               <div className="acc-form-footer">
-                <button className="btn" onClick={handleSaveProfile}>Save changes</button>
+                <button className="btn" disabled={busy} onClick={handleSaveProfile}>Save changes</button>
                 {profileError && <p className="acc-error" role="alert">{profileError}</p>}
               {saved && <span className="acc-saved">✓ Profile updated</span>}
               </div>
@@ -140,7 +157,7 @@ export default function AdminProfile({ onClose }) {
               <div className="profile-card-header">
                 <h3>Change password</h3>
                 <p className="acc-muted acc-small">
-                  Use 6–20 characters. You'll stay signed in after changing it.
+                  Use at least 8 characters (maximum 72 UTF-8 bytes). You'll stay signed in after changing it.
                 </p>
               </div>
 
@@ -149,7 +166,6 @@ export default function AdminProfile({ onClose }) {
                   <label>Current password</label>
                   <input
                     type="password"
-                    maxLength={20}
                     value={current}
                     onChange={(e) => setCurrent(e.target.value)}
                   />
@@ -159,7 +175,6 @@ export default function AdminProfile({ onClose }) {
                   <label>New password</label>
                   <input
                     type="password"
-                    maxLength={20}
                     value={next}
                     onChange={(e) => setNext(e.target.value)}
                   />
@@ -169,7 +184,6 @@ export default function AdminProfile({ onClose }) {
                   <label>Confirm new password</label>
                   <input
                     type="password"
-                    maxLength={20}
                     value={confirm}
                     onChange={(e) => setConfirm(e.target.value)}
                   />
@@ -180,7 +194,7 @@ export default function AdminProfile({ onClose }) {
               {pwSaved && <p className="acc-saved">✓ Password updated</p>}
 
               <div className="acc-form-footer">
-                <button className="btn" onClick={handleChangePassword}>
+                <button className="btn" disabled={busy} onClick={handleChangePassword}>
                   Update password
                 </button>
               </div>

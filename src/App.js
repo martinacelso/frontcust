@@ -24,7 +24,7 @@ function Shell() {
   const [bookingIntent, setBookingIntent] = useState(null)
   const clearBookingIntent = () => setBookingIntent(null)
   const continueBooking = (selection) => { setBookingIntent(selection); setAuthOpen(true) }
-  const { user: guestUser, signIn: guestSignIn, signUp: guestSignUp, authLoading, authError } = useAccount()
+  const { user: guestUser, signUp: guestSignUp, authLoading, authError } = useAccount()
   const { user: staffUser, login: staffLogin, logout: staffLogout } = useAdmin()
 
   const openAuth = () => setAuthOpen(true)
@@ -44,11 +44,11 @@ function Shell() {
   }
 
   // ---- Not signed in → public site ----
-  // Try staff login first, then guest login
+  // One backend login determines whether the guest or staff interface opens.
   const handleSignIn = async (email, password) => {
-    if (staffLogin(email, password)?.ok) { clearBookingIntent(); return { ok: true, role: 'staff' } }
-    const result = await guestSignIn(email, password)
-    return result.error ? result : { ok: true, role: 'guest' }
+    const result = await staffLogin(email, password)
+    if (!result.error && result.role !== 'guest') clearBookingIntent()
+    return result
   }
 
   const handleSignUp = (data) => {
