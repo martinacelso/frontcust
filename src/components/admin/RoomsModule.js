@@ -1,297 +1,93 @@
-import { allocationPlan, activeBooking } from '../../utils/inventory'
-import { deleteRoomError, roomStatusError } from '../../utils/actionValidation'
-import { textError, moneyError } from '../../utils/validation'
 import { useState } from 'react'
-import { useAdmin, T, sd, P } from '../../context/AdminContext'
-
-const STATUS_OPTIONS = [
-  ['available', 'Ready'],
-  ['occupied', 'Occupied'],
-  ['dirty', 'Clean up'],
-  ['maintenance', 'Maintenance'],
-]
+import { useAdmin, P } from '../../context/AdminContext'
+import useRoomInventory from '../../hooks/useRoomInventory'
 
 export default function RoomsModule() {
-  const {
-    types, rooms, setTypes, setRooms, by, free, nextId, logAction,
-  } = useAdmin()
+  const { sessionUser } = useAdmin()
+  if (!sessionUser || !['admin', 'front-desk'].includes(sessionUser.role)) return <p role="alert">You do not have access to room management.</p>
+  return <RoomInventory key={sessionUser.id} editable={sessionUser.role === 'admin'} />
+}
 
-  const { bookings, can } = useAdmin()
-
-  const [roomModal, setRoomModal] = useState(null)
-  const [newTypeMode, setNewTypeMode] = useState(false)
-
-  const today = T()
-  const tomorrow = sd(1)
-
-  // ---- room edit/add ----
-  function openRoom(id) {
-    if (!id) {
-      setRoomModal({
-        id: 0,
-        no: '',
-        type: types[0]?.n || '',
-        status: 'available',
-        rate: types[0]?.r || 0,
-        capacity: types[0]?.s || 2,
-      })
-      setNewTypeMode(false)
-    } else {
-      const r = by('rooms', id)
-      const typeRow = types.find((t) => t.n === r.type)
-      setRoomModal({
-        id: r.id,
-        no: r.no,
-        type: r.type,
-        status: r.status,
-        rate: typeRow?.r || 0,
-        capacity: typeRow?.s || 2,
-      })
-      setNewTypeMode(false)
-    }
+function RoomInventory({ editable }) {
+  const { types, rooms, busy, error, message, refresh, save } = useRoomInventory()
+  const [draft, setDraft] = useState(null)
+  const [formError, setFormError] = useState('')
+  const open = (kind, row) => {
+    setFormError('')
+    setDraft({ kind, ...(row || (kind === 'room'
+      ? { number: '', roomTypeId: types[0]?.id || '', notes: '' }
+      : { name: '', rate: '', capacity: 2, description: '', image: '/room-1.jpg' })) })
   }
-
-  function saveRoom() {
-    if (!can('rooms')) return window.alert('You do not have permission to change rooms.')
-    if (!roomModal) return
-    const existingRoom = roomModal.id ? by('rooms', roomModal.id) : { status: 'available' }
-    const statusError = roomStatusError(existingRoom, roomModal.status, bookings)
-    if (statusError) return window.alert(statusError)
-    if (existingRoom?.status === 'occupied' && existingRoom.type !== roomModal.type) return window.alert('An occupied room cannot change type.')
-    const error = textError(roomModal.no, 'Room number', 20) || textError(roomModal.type, 'Room type', 100) || moneyError(roomModal.rate, 'Nightly rate')
-    if (error) return window.alert(error)
-    if (rooms.some((r) => r.id !== roomModal.id && String(r.no).trim().toLowerCase() === String(roomModal.no).trim().toLowerCase())) return window.alert('This room number already exists.')
-    if (!STATUS_OPTIONS.some(([id]) => id === roomModal.status)) return window.alert('Select a valid room status.')
-    const draft = { ...roomModal, no: String(roomModal.no).trim(), type: types.find((t) => t.n.toLowerCase() === roomModal.type.trim().toLowerCase())?.n || roomModal.type.trim() }
-    if (!String(draft.no).trim()) return
-    if (!draft.type.trim()) return
-
-    const capacity = Number(draft.capacity)
-    if (!Number.isInteger(capacity) || capacity < 1 || capacity > 50) return window.alert('Capacity must be a whole number from 1 to 50.')
-    if (bookings.some((b) => activeBooking(b) && b.type === draft.type && (b.gCount || (b.adults ?? 2) + (b.children ?? 0)) > capacity)) return window.alert('This capacity is too small for an existing reservation.')
-    if (draft.id) {
-      const proposed = rooms.map((r) => r.id === draft.id ? { ...r, type: draft.type, status: draft.status } : r)
-      const affected = bookings.filter((b) => activeBooking(b) && (b.out > today || b.st === 'checked-in') && (b.type === draft.type || b.type === existingRoom.type))
-      if (affected.some((b) => !allocationPlan(proposed, bookings, b, b.id))) return window.alert('This room change would leave a reservation without a room. Reassign or cancel that reservation first.')
+  const field = (name, value) => setDraft((old) => ({ ...old, [name]: value }))
+  async function submit(event) {
+    event.preventDefault()
+    if (busy || !draft) return
+    setFormError('')
+    const isType = draft.kind === 'type'
+    const body = isType
+      ? { name: draft.name.trim(), rate: Number(draft.rate), capacity: Number(draft.capacity), description: draft.description || '', image: draft.image || '/room-1.jpg' }
+      : { number: draft.number.trim(), roomTypeId: draft.roomTypeId, notes: draft.notes || '' }
+    if (isType && (!body.name || !Number.isFinite(body.rate) || body.rate <= 0 || body.rate > 10000000 ||
+      Math.abs(body.rate * 100 - Math.round(body.rate * 100)) > 0.000001 || !Number.isInteger(body.capacity) || body.capacity < 1 || body.capacity > 50)) {
+      setFormError('Enter a name, a positive price with at most two decimals, and a capacity from 1 to 50.')
+      return
     }
-
-    // Existing confirmed quotes keep their original rates.
-    const existingType = types.find((t) => t.n === draft.type)
-    if (!existingType) {
-      setTypes((prev) => [
-        ...prev,
-        { n: draft.type.trim(), r: +draft.rate, s: capacity, img: '/room-1.jpg', desc: 'Contact the hotel for room details.' },
-      ])
-    } else {
-      // Update rate if user changed it
-      setTypes((prev) =>
-        prev.map((t) =>
-          t.n === existingType.n ? { ...t, r: +draft.rate, s: capacity } : t
-        )
-      )
+    if (!isType && (!/^[a-z0-9][a-z0-9 -]{0,19}$/i.test(body.number) || !body.roomTypeId)) {
+      setFormError('Enter a room number using letters, numbers, spaces or hyphens, and choose a type.')
+      return
     }
-
-    if (draft.id) {
-      logAction(
-        'Edited room',
-        `Room ${draft.no}`,
-        `${draft.type} · ${draft.status}`
-      )
-      setRooms((prev) =>
-        prev.map((r) =>
-          r.id === draft.id
-            ? {
-                ...r,
-                no: draft.no,
-                type: draft.type.trim(),
-                status: draft.status,
-              }
-            : r
-        )
-      )
-    } else {
-      logAction(
-        'Added room',
-        `Room ${draft.no}`,
-        `${draft.type} · ${draft.status}`
-      )
-      setRooms((prev) => [
-        ...prev,
-        {
-          id: nextId(),
-          no: draft.no,
-          type: draft.type.trim(),
-          status: draft.status,
-          hk: '',
-        },
-      ])
-    }
-    setRoomModal(null)
+    if (draft.id) body.version = draft.version
+    const endpoint = (isType ? '/types' : '') + (draft.id ? '/' + draft.id : '')
+    const result = await save(endpoint, draft.id ? 'PATCH' : 'POST', body, isType ? 'Room type saved.' : 'Room saved.')
+    if (!result.error) setDraft(null)
   }
-
-  function deleteRoom(id) {
-    if (!can('rooms')) return window.alert('You do not have permission to delete rooms.')
-    const error = deleteRoomError(by('rooms', id), bookings)
-    if (error) return window.alert(error)
-    const proposed = rooms.filter((r) => r.id !== id)
-    const affected = bookings.filter((b) => activeBooking(b) && (b.out > today || b.st === 'checked-in') && b.type === by('rooms', id)?.type)
-    if (affected.some((b) => !allocationPlan(proposed, bookings, b, b.id))) return window.alert('This room is needed for an existing reservation.')
-    if (window.confirm('Delete this room?')) {
-      logAction('Deleted room', `Room ${by('rooms', id)?.no}`, '')
-      setRooms((prev) => prev.filter((r) => r.id !== id))
-    }
-  }
-
-
-  return (
-    <>
-      <div className="admin-row" style={{ marginBottom: 14 }}>
-        <div>
-          <button className="admin-btn" onClick={() => openRoom(0)}>
-            + Add room
-          </button>
-        </div>
-      </div>
-
-      <div className="admin-table-wrap">
-        <table className="admin-table">
-          <thead>
-            <tr>
-              <th>Room</th>
-              <th>Type</th>
-              <th>Rate / night</th>
-              <th>Status</th>
-              <th>Available tonight</th>
-              <th />
-            </tr>
-          </thead>
-          <tbody>
-            {rooms.length === 0 ? (
-              <tr>
-                <td colSpan="6" className="admin-muted">
-                  No rooms yet. Add one to begin.
-                </td>
-              </tr>
-            ) : (
-              rooms.map((r) => {
-                const isFree = free(r, today, tomorrow) && r.status !== 'occupied'
-                const typeRow = types.find((t) => t.n === r.type)
-                return (
-                  <tr key={r.id}>
-                    <td>{r.no}</td>
-                    <td>{r.type}</td>
-                    <td>{P(typeRow?.r || 0)}</td>
-                    <td>
-                      <span className={`admin-badge ${r.status}`}>
-                        {STATUS_OPTIONS.find(([id]) => id === r.status)?.[1] || r.status}
-                      </span>
-                    </td>
-                    <td>{isFree ? 'Yes' : 'No'}</td>
-                    <td>
-                      <button
-                        className="admin-link"
-                        onClick={() => openRoom(r.id)}
-                      >
-                        Edit
-                      </button>
-                      <button
-                        className="admin-link danger"
-                        onClick={() => deleteRoom(r.id)}
-                      >
-                        Delete
-                      </button>
-                    </td>
-                  </tr>
-                )
-              })
-            )}
-          </tbody>
-        </table>
-      </div>
-
-      {/* ---- Room modal ---- */}
-      {roomModal && (
-        <div className="acc-modal-overlay" onClick={() => setRoomModal(null)}>
-          <div className="acc-modal" onClick={(e) => e.stopPropagation()}>
-            <h3>{roomModal.id ? 'Edit room' : 'Add room'}</h3>
-
-            <label>Room number</label>
-            <input
-              value={roomModal.no}
-              onChange={(e) => setRoomModal({ ...roomModal, no: e.target.value })}
-            />
-
-            <label>Type</label>
-            {!newTypeMode ? (
-              <select
-                value={roomModal.type}
-                onChange={(e) => {
-                  const t = types.find((x) => x.n === e.target.value)
-                  setRoomModal({
-                    ...roomModal,
-                    type: e.target.value,
-                    rate: t?.r || 0,
-                    capacity: t?.s || 2,
-                  })
-                }}
-              >
-                {types.map((t) => (
-                  <option key={t.n} value={t.n}>{t.n}</option>
-                ))}
-              </select>
-            ) : (
-              <input
-                value={roomModal.type}
-                onChange={(e) =>
-                  setRoomModal({ ...roomModal, type: e.target.value })
-                }
-                placeholder="e.g. Junior Suite"
-              />
-            )}
-
-            <button
-              type="button"
-              className="admin-link"
-              style={{ marginTop: 8 }}
-              onClick={() => {
-                setNewTypeMode((v) => !v)
-                setRoomModal({ ...roomModal, type: '' })
-              }}
-            >
-              {newTypeMode ? '← Choose existing type' : '+ Type a new type'}
-            </button>
-
-            <label>Rate / night (₱)</label>
-            <input
-              type="number"
-              value={roomModal.rate}
-              onChange={(e) => setRoomModal({ ...roomModal, rate: e.target.value })}
-            />
-
-            <label>Maximum guests for this room type</label>
-            <input type="number" min="1" max="50" step="1" value={roomModal.capacity} onChange={(e) => setRoomModal({ ...roomModal, capacity: e.target.value })} />
-            <p className="acc-muted acc-small">Rate and capacity apply to every room of this type. Existing reservations keep their agreed rate.</p>
-            <label>Status</label>
-            <select
-              value={roomModal.status}
-              onChange={(e) => setRoomModal({ ...roomModal, status: e.target.value })}
-            >
-              {STATUS_OPTIONS.map(([id, label]) => (
-                <option key={id} value={id}>{label}</option>
-              ))}
+  return <>
+    <div className="admin-row" style={{ gap: 12, marginBottom: 16 }}>
+      <button className="admin-btn" disabled={busy || !!draft} onClick={refresh}>{busy ? 'Please wait…' : 'Refresh'}</button>
+      {editable && <>
+        <button className="admin-btn" disabled={busy || !!draft || !types.length} onClick={() => open('room')}>+ Add room</button>
+        <button className="admin-btn" disabled={busy || !!draft} onClick={() => open('type')}>+ Add room type</button>
+      </>}
+    </div>
+    {!draft && error && <p role="alert" className="acc-error">{error} Close any edit form and refresh to get the latest records.</p>}
+    {message && <p role="status" className="acc-saved">{message}</p>}
+    <div className="admin-table-wrap"><table className="admin-table">
+      <thead><tr><th>Room</th><th>Type</th><th>Rate / night</th><th>Status</th><th>Notes</th><th>Action</th></tr></thead>
+      <tbody>{rooms.map((room) => {
+        const type = types.find((item) => item.id === room.roomTypeId)
+        return <tr key={room.id}><td>{room.number}</td><td>{type?.name || 'Unknown type'}</td><td>{type ? P(type.rate) : '—'}</td>
+          <td><span className={'admin-badge ' + room.status}>{room.status === 'available' ? 'Clean' : room.status}</span></td><td>{room.notes || '—'}</td>
+          <td>{editable && room.status !== 'occupied' && <button className="admin-link" disabled={busy || !!draft} onClick={() => open('room', room)}>Edit</button>}</td></tr>
+      })}{!rooms.length && <tr><td colSpan="6">{busy ? 'Loading rooms…' : error ? 'Room data could not be loaded.' : 'No rooms yet.'}</td></tr>}</tbody>
+    </table></div>
+    <h3>Room types</h3>
+    <div className="admin-table-wrap"><table className="admin-table">
+      <thead><tr><th>Type</th><th>Rate / night</th><th>Maximum guests</th><th>Action</th></tr></thead>
+      <tbody>{types.map((type) => <tr key={type.id}><td>{type.name}</td><td>{P(type.rate)}</td><td>{type.capacity}</td>
+        <td>{editable && <button className="admin-link" disabled={busy || !!draft} onClick={() => open('type', type)}>Edit rate / details</button>}</td></tr>)}</tbody>
+    </table></div>
+    {draft && <div className="acc-modal-overlay"><div className="acc-modal" role="dialog" aria-modal="true" aria-labelledby="room-edit-title">
+      <h3 id="room-edit-title">{draft.id ? 'Edit' : 'Add'} {draft.kind === 'type' ? 'room type' : 'room'}</h3>
+      <form onSubmit={submit}>
+        <fieldset disabled={busy} style={{ border: 0, padding: 0, margin: 0 }}>
+          {draft.kind === 'type' ? <>
+            <label htmlFor="type-name">Name</label><input id="type-name" autoFocus required minLength="2" maxLength="100" disabled={!!draft.id} value={draft.name} onChange={(e) => field('name', e.target.value)} />
+            <label htmlFor="type-rate">Nightly rate (₱)</label><input id="type-rate" type="number" required min="0.01" max="10000000" step="0.01" value={draft.rate} onChange={(e) => field('rate', e.target.value)} />
+            <label htmlFor="type-capacity">Maximum guests</label><input id="type-capacity" type="number" required min="1" max="50" step="1" disabled={!!draft.id} value={draft.capacity} onChange={(e) => field('capacity', e.target.value)} />
+            <label htmlFor="type-description">Description</label><textarea id="type-description" maxLength="1000" value={draft.description || ''} onChange={(e) => field('description', e.target.value)} />
+            <p className="acc-muted">The rate applies to every room of this type.</p>
+          </> : <>
+            <label htmlFor="room-number">Room number</label><input id="room-number" autoFocus required maxLength="20" value={draft.number} onChange={(e) => field('number', e.target.value)} />
+            <label htmlFor="room-type">Type</label><select id="room-type" required disabled={!!draft.id} value={draft.roomTypeId} onChange={(e) => field('roomTypeId', e.target.value)}>
+              <option value="">Choose a type</option>{types.map((type) => <option key={type.id} value={type.id}>{type.name}</option>)}
             </select>
-
-            <div className="acc-modal-actions">
-              <button className="btn ghost-dark" onClick={() => setRoomModal(null)}>
-                Cancel
-              </button>
-              <button className="btn" onClick={saveRoom}>Save</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-
-    </>
-  )
+            <label htmlFor="room-notes">Notes</label><textarea id="room-notes" maxLength="500" value={draft.notes || ''} onChange={(e) => field('notes', e.target.value)} />
+            {!draft.id && <p className="acc-muted">New rooms require cleaning before being marked clean.</p>}
+          </>}
+          {(formError || error) && <p role="alert" className="acc-error">{formError || error} {error && 'If this record changed, cancel and refresh before editing again.'}</p>}
+          <div className="acc-modal-actions"><button type="button" className="btn ghost-dark" onClick={() => setDraft(null)}>Cancel</button><button className="btn" type="submit">{busy ? 'Saving…' : 'Save'}</button></div>
+        </fieldset>
+      </form>
+    </div></div>}
+  </>
 }

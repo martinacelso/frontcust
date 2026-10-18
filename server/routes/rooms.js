@@ -3,6 +3,9 @@ const { timingSafeEqual } = require('node:crypto');
 const { rateLimit } = require('express-rate-limit');
 const RoomType = require('../models/RoomType');
 const Room = require('../models/Room');
+const Booking = require('../models/Booking');
+const { activeFilter, today } = require('../utils/bookingRules');
+const { transaction, failure } = require('../utils/transaction');
 const { authenticated, requireRoles } = require('../middleware/auth');
 const router = express.Router();
 const objectId = (v) => typeof v === 'string' && /^[a-f\d]{24}$/i.test(v);
@@ -97,6 +100,17 @@ router.patch('/:id', writes, requireRoles('admin'), async (req, res) => {
 router.patch('/:id/status', writes, requireRoles('admin', 'housekeeping'), async (req, res) => {
   const b = req.body || {};
   if (!objectId(req.params.id) || !versionOK(b.version) || !['available', 'dirty', 'maintenance'].includes(b.status)) return res.status(400).json({ error: 'Choose a valid housekeeping status and version.' });
+  if (b.status === 'maintenance') {
+    const room = await transaction(async (session) => {
+      const locked = await Room.findOneAndUpdate({ _id: req.params.id, __v: b.version, status: { $ne: 'occupied' } },
+        { $set: { status: 'maintenance' }, $inc: { __v: 1 } }, { session, new: true, runValidators: true });
+      if (!locked) throw failure(409, 'Room unavailable, occupied, or changed. Refresh and try again.');
+      const reserved = await Booking.exists({ room: locked._id, ...activeFilter(), checkOut: { $gt: today() } }).session(session);
+      if (reserved) throw failure(409, 'This room has an active reservation. Resolve the reservation before maintenance.');
+      return locked;
+    });
+    return res.json({ room: roomView(room) });
+  }
   const room = await Room.findOneAndUpdate({ _id: req.params.id, __v: b.version, status: { $ne: 'occupied' } },
     { $set: { status: b.status }, $inc: { __v: 1 } }, { new: true, runValidators: true });
   if (!room) return res.status(409).json({ error: 'Room unavailable, occupied, or changed. Refresh and try again.' });
@@ -105,6 +119,7 @@ router.patch('/:id/status', writes, requireRoles('admin', 'housekeeping'), async
 
 // No delete route: reservation/history checks must be implemented first.
 router.use((error, req, res, next) => {
+  if (error.status) return res.status(error.status).json({ error: error.message });
   if (error.code === 11000) return res.status(409).json({ error: 'That room number or room type name already exists.' });
   if (error.name === 'ValidationError' || error.name === 'CastError') return res.status(400).json({ error: 'Check the room details.' });
   next(error);
