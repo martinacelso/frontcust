@@ -1,197 +1,90 @@
-import { stayError } from '../../utils/validation'
-import { checkInError, checkInBookingError } from '../../utils/actionValidation'
-import { useState } from 'react'
-import { useAdmin, P } from '../../context/AdminContext'
+import { useEffect, useRef, useState } from 'react'
+import { useAdmin } from '../../context/AdminContext'
+import { bookingRequest } from '../../utils/bookingApi'
 
+const money = (n) => new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP' }).format(n / 100)
 export default function CheckInModule() {
-  const {
-    bookings, rooms, by, balanceDue, free, getRoomType, checkIn, checkOut: commitCheckOut,
-  } = useAdmin()
+  const { sessionUser } = useAdmin()
+  if (!sessionUser || !['admin', 'front-desk'].includes(sessionUser.role)) return <p role="alert">Staff sign-in required.</p>
+  return <Desk key={sessionUser.id} />
+}
 
-  const { can } = useAdmin()
-
-  const [checkInModal, setCheckInModal] = useState(null)
-
-  const arrivals = bookings.filter((b) => b.st === 'confirmed')
-  const inHouse = bookings.filter((b) => b.st === 'checked-in')
-
-  function openCheckIn(bookingId) {
-    if (!can('chk')) return window.alert('You do not have permission to check in guests.')
-    setCheckInModal({ bookingId, roomId: 0 })
+function Desk() {
+  const [status, setStatus] = useState('confirmed')
+  const [page, setPage] = useState(1)
+  const [rows, setRows] = useState([])
+  const [more, setMore] = useState(false)
+  const [reload, setReload] = useState(0)
+  const [loading, setLoading] = useState(true)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const [actionError, setActionError] = useState('')
+  const [message, setMessage] = useState('')
+  const [selected, setSelected] = useState(null)
+  const [simulate, setSimulate] = useState(false)
+  const [enabled, setEnabled] = useState(false)
+  const lock = useRef(false)
+  const alive = useRef(true)
+  useEffect(() => { alive.current = true; return () => { alive.current = false } }, [])
+  useEffect(() => {
+    let current = true
+    setLoading(true); setRows([]); setError('')
+    Promise.all([bookingRequest(`/bookings/staff-list?status=${status}&page=${page}`), bookingRequest('/bookings/options')]).then(([result, options]) => {
+      if (!current) return
+      setEnabled(options.demoPaymentsEnabled === true)
+      if (result.error) setError(result.error)
+      else { setRows(result.bookings); setMore(result.hasMore) }
+      setLoading(false)
+    })
+    return () => { current = false }
+  }, [status, page, reload])
+  async function submit() {
+    if (lock.current || !selected) return
+    lock.current = true; setBusy(true); setActionError('')
+    try {
+      const checkout = selected.status === 'checked-in'
+      const result = await bookingRequest(`/bookings/${selected.id}/${checkout ? 'check-out' : 'check-in'}`, { version: selected.version, simulateBalance: simulate })
+      if (!alive.current) return
+      if (result.error) setActionError(result.error + ' Close and refresh before retrying.')
+      else {
+        setSelected(null); setReload((n) => n + 1)
+        setMessage(checkout ? 'Checked out. Room marked dirty.' + (result.booking.simulatedSettlement ? ` Simulated settlement: ${result.booking.simulatedSettlement.reference}` : '') : 'Checked in. Room marked occupied.')
+      }
+    } finally { lock.current = false; if (alive.current) setBusy(false) }
   }
-
-  function confirmCheckIn() {
-    if (!can('chk')) return window.alert('You do not have permission to check in guests.')
-    if (!checkInModal) return
-    const b = by('bookings', checkInModal.bookingId)
-    const r = by('rooms', checkInModal.roomId)
-    const error = checkInError(b, r, bookings)
-    if (error) return window.alert(error)
-    if (!by('guests', b.g)) return window.alert('The guest record is missing.')
-    if (!window.confirm(`Check in reservation #${b.id} to room ${r.no}?`)) return
-
-    const result = checkIn(b.id, r.id)
-    if (result.error) return window.alert(result.error)
-    setCheckInModal(null)
-  }
-
-  function checkOut(bookingId) {
-    if (!can('chk')) return window.alert('You do not have permission to check out guests.')
-    const b = by('bookings', bookingId)
-    if (!b) return window.alert('This reservation no longer exists.')
-    if (!window.confirm(`Check out reservation #${b.id} and mark its room for cleaning?`)) return
-    const result = commitCheckOut(b.id)
-    if (result.error) window.alert(result.error)
-  }
-
-  const bookingBeingCheckedIn = checkInModal
-    ? by('bookings', checkInModal.bookingId)
-    : null
-
-  const checkInBlocked = bookingBeingCheckedIn ? checkInBookingError(bookingBeingCheckedIn) || stayError({ ...bookingBeingCheckedIn, adults: bookingBeingCheckedIn.adults ?? bookingBeingCheckedIn.gCount ?? 2, children: bookingBeingCheckedIn.children ?? 0 }, { allowPast: true, capacity: getRoomType(bookingBeingCheckedIn.type)?.s }) : ''
-
-  const assignableRooms = bookingBeingCheckedIn && !checkInBlocked
-    ? rooms.filter(
-        (r) =>
-          !checkInError(bookingBeingCheckedIn, r, bookings) &&
-          free(
-            r,
-            bookingBeingCheckedIn.in,
-            bookingBeingCheckedIn.out,
-            bookingBeingCheckedIn.id
-          )
-      )
-    : []
-
-  return (
-    <>
-      <h2 className="admin-h2">Arrivals (confirmed)</h2>
-      <div className="admin-table-wrap">
-        <table className="admin-table">
-          <thead>
-            <tr>
-              <th>Ref</th>
-              <th>Guest</th>
-              <th>Type</th>
-              <th>Dates</th>
-              <th />
-            </tr>
-          </thead>
-          <tbody>
-            {arrivals.length === 0 ? (
-              <tr>
-                <td colSpan="5" className="admin-muted">No arrivals today.</td>
-              </tr>
-            ) : (
-              arrivals.map((b) => (
-                <tr key={b.id}>
-                  <td>#{b.id}</td>
-                  <td>{by('guests', b.g)?.name}</td>
-                  <td>{b.type}</td>
-                  <td>{b.in} → {b.out}</td>
-                  <td>
-                    <button className="admin-link" onClick={() => openCheckIn(b.id)}>
-                      Confirm &amp; check in
-                    </button>
-                  </td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
-      </div>
-
-      <h2 className="admin-h2">In-house</h2>
-      <div className="admin-table-wrap">
-        <table className="admin-table">
-          <thead>
-            <tr>
-              <th>Ref</th>
-              <th>Guest</th>
-              <th>Room</th>
-              <th>Out</th>
-              <th>Balance</th>
-              <th />
-            </tr>
-          </thead>
-          <tbody>
-            {inHouse.length === 0 ? (
-              <tr>
-                <td colSpan="6" className="admin-muted">No guests in-house.</td>
-              </tr>
-            ) : (
-              inHouse.map((b) => (
-                <tr key={b.id}>
-                  <td>#{b.id}</td>
-                  <td>{by('guests', b.g)?.name}</td>
-                  <td>{by('rooms', b.room)?.no || '—'}</td>
-                  <td>{b.out}</td>
-                  <td>{P(balanceDue(b))}</td>
-                  <td>
-                    <button className="admin-link" onClick={() => checkOut(b.id)}>
-                      Check out
-                    </button>
-                  </td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
-      </div>
-
-      {checkInModal && bookingBeingCheckedIn && (
-        <div className="acc-modal-overlay" onClick={() => setCheckInModal(null)}>
-          <div className="acc-modal" onClick={(e) => e.stopPropagation()}>
-            <h3>
-              Check in #{bookingBeingCheckedIn.id} –{' '}
-              {by('guests', bookingBeingCheckedIn.g)?.name}
-            </h3>
-
-            <p className="acc-muted">
-              Reserved: <b>{bookingBeingCheckedIn.type}</b>, {bookingBeingCheckedIn.in} →{' '}
-              {bookingBeingCheckedIn.out}
-            </p>
-
-            {checkInBlocked ? (<p className="acc-error" role="alert">{checkInBlocked}</p>) : assignableRooms.length === 0 ? (
-              <p className="acc-error">
-                No clean, available rooms for these dates.
-              </p>
-            ) : (
-              <>
-                <label>Assign room</label>
-                <select
-                  value={checkInModal.roomId}
-                  onChange={(e) =>
-                    setCheckInModal({ ...checkInModal, roomId: +e.target.value })
-                  }
-                >
-                  <option value={0}>— choose —</option>
-                  {assignableRooms.map((r) => (
-                    <option key={r.id} value={r.id}>
-                      {r.no} – {r.type}
-                    </option>
-                  ))}
-                </select>
-              </>
-            )}
-
-            <div className="acc-modal-actions">
-              <button
-                className="btn ghost-dark"
-                onClick={() => setCheckInModal(null)}
-              >
-                Cancel
-              </button>
-              {can('chk') && by('guests', bookingBeingCheckedIn.g) &&
-                assignableRooms.some((r) => r.id === checkInModal.roomId) && (
-                <button className="btn" onClick={confirmCheckIn}>
-                  Check in guest
-                </button>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-    </>
-  )
+  const balance = selected ? Math.max(0, selected.totalCents - selected.paidCents) : 0
+  const checkout = selected?.status === 'checked-in'
+  return <>
+    <h2 className="admin-h2">Check-in and check-out</h2>
+    <div className="admin-row" style={{ gap: 12 }}>
+      <label>View <select value={status} disabled={loading || !!selected} onChange={(e) => { setStatus(e.target.value); setPage(1); setMessage('') }}>
+        <option value="confirmed">Confirmed reservations</option><option value="checked-in">In-house guests</option><option value="checked-out">Checked out</option>
+      </select></label>
+      <button className="admin-btn" disabled={loading || !!selected} onClick={() => setReload((n) => n + 1)}>Refresh</button>
+    </div>
+    <p>Check-in uses the assigned room. Housekeeping must mark it clean first. Arrival dates follow Philippine time.</p>
+    {error && <p role="alert" className="acc-error">{error}</p>}
+    {message && <p role="status" className="acc-saved">{message}</p>}
+    <div className="admin-table-wrap"><table className="admin-table"><thead><tr><th>Guest</th><th>Room</th><th>Dates</th><th>Balance</th><th>Action</th></tr></thead>
+      <tbody>{rows.map((b) => <tr key={b.id}><td>{b.guest?.name || 'Guest unavailable'}</td><td>{b.roomNumber} · {b.type}</td>
+        <td>{b.checkIn} to {b.checkOut}</td><td>{money(Math.max(0, b.totalCents - b.paidCents))}</td>
+        <td>{status !== 'checked-out' ? <button className="admin-link" disabled={!!selected || loading} onClick={() => { setSelected(b); setSimulate(false); setActionError(''); setMessage('') }}>{status === 'confirmed' ? 'Check in' : 'Check out'}</button> : b.simulatedSettlement ? `Simulated settlement: ${b.simulatedSettlement.reference}` : 'Completed'}</td></tr>)}
+        {!rows.length && <tr><td colSpan="5">{loading ? 'Loading…' : error ? 'Records unavailable.' : 'No reservations in this view.'}</td></tr>}</tbody></table></div>
+    <div className="admin-row" style={{ gap: 12, marginTop: 16 }}>
+      <button className="admin-btn" disabled={loading || !!selected || page === 1} onClick={() => setPage((n) => n - 1)}>Previous</button>
+      <span>Page {page}</span><button className="admin-btn" disabled={loading || !!selected || !more || !!error} onClick={() => setPage((n) => n + 1)}>Next</button>
+    </div>
+    {selected && <section aria-label="Confirm guest transition" style={{ padding: 20, marginTop: 20, border: '1px solid #ddd', borderRadius: 12 }}>
+      <h3>Confirm {checkout ? 'check-out' : 'check-in'}</h3>
+      <p>{selected.guest?.name || 'Guest unavailable'} · Room {selected.roomNumber}<br />Reference: {selected.id}</p>
+      <p>{checkout ? 'The room will be marked dirty for cleaning. Early departure keeps the full booked price.' : 'The assigned room will be marked occupied. Check-in is allowed during the booked stay, before departure day.'}</p>
+      {checkout && balance > 0 && <>
+        <p>Outstanding balance: {money(balance)}. No real money will be collected.</p>
+        {enabled ? <label><input type="checkbox" checked={simulate} disabled={busy} onChange={(e) => setSimulate(e.target.checked)} /> Record a simulated payment for this balance.</label> : <p>Simulated payments are disabled. Outstanding balances block check-out.</p>}
+      </>}
+      {actionError && <p role="alert" className="acc-error">{actionError}</p>}
+      <div style={{ marginTop: 12 }}><button className="admin-btn" disabled={busy || !!actionError || (checkout && balance > 0 && (!enabled || !simulate))} onClick={submit}>{busy ? 'Saving…' : 'Confirm'}</button>{' '}
+        <button className="admin-btn" disabled={busy} onClick={() => setSelected(null)}>Close</button></div>
+    </section>}
+  </>
 }

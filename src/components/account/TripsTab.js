@@ -1,68 +1,27 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useAccount } from '../../context/AccountContext'
-import { hotelDate } from '../../utils/hotel'
 import TripCard from './TripCard'
 import BookingModal from './BookingModal'
-
 export default function TripsTab() {
-  const { myBookings, cancelBooking } = useAccount()
+  const { myBookings, refreshBookings, bookingLoading, bookingError, bookingBusy, cancelBooking, simulatePayment, demoEnabled } = useAccount()
   const [modal, setModal] = useState(null)
-
+  useEffect(() => { refreshBookings() }, [refreshBookings])
   const mine = myBookings()
-  const today = hotelDate()
-  const isUpcoming = (b) =>
-    b.st !== 'cancelled' && b.out >= today && b.st !== 'checked-out'
-
-  const upcoming = mine.filter(isUpcoming)
-  const pastAndCancelled = mine.filter((b) => !isUpcoming(b))
-
-  function handleViewDetails(id) {
-    const b = mine.find((x) => x.id === id)
-    if (b) setModal({ type: 'receipt', booking: b })
+  function details(id) { setModal({ type: 'receipt', booking: mine.find((b) => b.id === id) }) }
+  function cancel(id) { setModal({ type: 'cancel', booking: mine.find((b) => b.id === id), label: 'Cancel reservation', onConfirm: () => cancelBooking(id) }) }
+  function pay(id) {
+    setModal({ type: 'simulate', booking: mine.find((b) => b.id === id), label: 'Simulate down payment', onConfirm: async () => {
+      const result = await simulatePayment(id)
+      if (result.error) return result
+      setModal({ type: 'confirmed', booking: result.booking }); return false
+    } })
   }
-
-  function handleCancel(id) {
-    const b = mine.find((x) => x.id === id)
-    if (!b) return
-    setModal({
-      type: 'cancel',
-      booking: b,
-      label: 'Yes, cancel',
-      onConfirm: () => cancelBooking(id),
-    })
-  }
-
-  return (
-    <>
-      <h2 className="acc-section-title">Upcoming</h2>
-      {upcoming.length > 0 ? (
-        upcoming.map((b) => (
-          <TripCard
-            key={b.id}
-            booking={b}
-            onViewDetails={handleViewDetails}
-            onCancel={handleCancel}
-          />
-        ))
-      ) : (
-        <div className="acc-empty">Nothing upcoming.</div>
-      )}
-
-      <h2 className="acc-section-title">Past &amp; cancelled</h2>
-      {pastAndCancelled.length > 0 ? (
-        pastAndCancelled.map((b) => (
-          <TripCard
-            key={b.id}
-            booking={b}
-            onViewDetails={handleViewDetails}
-            onCancel={handleCancel}
-          />
-        ))
-      ) : (
-        <div className="acc-empty">No past bookings yet.</div>
-      )}
-
-      <BookingModal modal={modal} onClose={() => setModal(null)} />
-    </>
-  )
+  return <>
+    <h2 className="acc-section-title">My bookings</h2>
+    <button className="btn ghost-dark" disabled={bookingLoading || bookingBusy || !!modal} onClick={refreshBookings}>{bookingLoading ? 'Loading…' : 'Refresh bookings'}</button>
+    {bookingError && <p className="acc-error" role="alert">{bookingError}</p>}
+    {!bookingLoading && !bookingError && mine.length === 0 && <div className="acc-empty">You have no saved bookings yet.</div>}
+    {mine.map((b) => <TripCard key={b.id} booking={b} busy={bookingBusy || bookingLoading || !!modal} onViewDetails={details} onCancel={cancel} onPay={demoEnabled ? pay : undefined} />)}
+    <BookingModal modal={modal} onClose={() => setModal(null)} />
+  </>
 }

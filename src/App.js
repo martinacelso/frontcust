@@ -21,9 +21,20 @@ import AdminLayout from './components/admin/AdminLayout'
 
 function Shell() {
   const [authOpen, setAuthOpen] = useState(false)
-  const [bookingIntent, setBookingIntent] = useState(null)
-  const clearBookingIntent = () => setBookingIntent(null)
-  const continueBooking = (selection) => { setBookingIntent(selection); setAuthOpen(true) }
+  const [bookingIntent, setBookingIntent] = useState(() => {
+    try {
+      const saved = JSON.parse(sessionStorage.getItem('frontcust.booking-search') || 'null')
+      return saved && typeof saved.in === 'string' && typeof saved.out === 'string' && Number.isInteger(saved.adults) && Number.isInteger(saved.children) ? saved : null
+    } catch { return null }
+  })
+  const clearBookingIntent = () => {
+    try { sessionStorage.removeItem('frontcust.booking-search') } catch { /* Storage may be disabled. */ }
+    setBookingIntent(null)
+  }
+  const continueBooking = (selection) => {
+    try { sessionStorage.setItem('frontcust.booking-search', JSON.stringify(selection)) } catch { /* Storage may be disabled. */ }
+    setBookingIntent(selection); setAuthOpen(true)
+  }
   const { user: guestUser, signUp: guestSignUp, authLoading, authError } = useAccount()
   const { user: staffUser, login: staffLogin, logout: staffLogout } = useAdmin()
 

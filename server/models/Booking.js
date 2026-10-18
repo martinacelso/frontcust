@@ -21,6 +21,20 @@ const schema = new mongoose.Schema({
   requestId: { type: String, required: true },
   fingerprint: { type: String, required: true },
   cancelledAt: Date,
+  checkedInAt: Date,
+  checkedOutAt: Date,
+  checkedInBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  checkedOutBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  simulatedSettlement: {
+    reference: String,
+    amountCents: { type: Number, min: 0, validate: Number.isSafeInteger },
+    recordedAt: Date,
+  },
+  simulatedPayment: {
+    reference: String,
+    amountCents: { type: Number, min: 0, validate: Number.isSafeInteger },
+    recordedAt: Date,
+  },
 }, { timestamps: true });
 schema.index({ guest: 1, requestId: 1 }, { unique: true });
 schema.index({ room: 1, checkIn: 1, checkOut: 1, status: 1 });

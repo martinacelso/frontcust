@@ -1,53 +1,17 @@
-import { nights, P, useAccount } from '../../context/AccountContext'
-
-import { hotelDate } from '../../utils/hotel'
-
-const STATUS_LABELS = {
-  confirmed: 'Confirmed',
-  'checked-in': 'Checked in',
-  'checked-out': 'Checked out',
-  cancelled: 'Cancelled',
-}
-
-export default function TripCard({ booking, onViewDetails, onCancel }) {
-  const { TYPES } = useAccount()
-  const room = TYPES.find((t) => t.n === booking.type)
-  const nightCount = nights(booking.in, booking.out)
-  const total = booking.total ?? nightCount * (room?.r || 0)
-  const today = hotelDate()
-  const canCancel = booking.st === 'confirmed' && booking.in > today
-
-  return (
-    <div className="acc-trip">
-      <div className="acc-trip-top">
-        <div>
-          <h3>{booking.type}</h3>
-          <div className="acc-muted">
-            {booking.in} → {booking.out} · {nightCount} night(s) · {booking.g} guest(s)
-          </div>
-          <div className="acc-muted acc-small">
-            Ref {booking.id}
-            {booking.note ? ` · ${booking.note}` : ''}
-          </div>
-        </div>
-        <div className="acc-trip-right">
-          <span className={`acc-badge ${booking.st}`}>
-            {STATUS_LABELS[booking.st] || booking.st}
-          </span>
-          <div className="acc-price">{P(total)}</div>
-        </div>
-      </div>
-
-      <div className="acc-trip-actions">
-        <button className="btn ghost-dark" onClick={() => onViewDetails?.(booking.id)}>
-          View details
-        </button>
-        {canCancel && (
-          <button className="btn ghost-dark" onClick={() => onCancel?.(booking.id)}>
-            Cancel booking
-          </button>
-        )}
-      </div>
+import { P } from '../../context/AccountContext'
+import { STATUS_LABELS } from '../../utils/bookingApi'
+export default function TripCard({ booking: b, onViewDetails, onCancel, onPay, busy = false }) {
+  return <article className="acc-trip">
+    <div className="acc-trip-top"><div><h3>{b.type}</h3><p>{b.in} → {b.out} · {b.g} guest(s)</p>
+      <p className="acc-muted" style={{ overflowWrap: 'anywhere' }}>Reference: {b.id}</p></div>
+      <div className="acc-trip-right"><span className={'acc-badge ' + b.st}>{STATUS_LABELS[b.st] || b.st}</span><div className="acc-price">{P(b.total)}</div></div></div>
+    {b.simulation && <p className="acc-muted">Includes a simulated payment. No money was charged.</p>}
+    <div className="acc-trip-actions">
+      <button className="btn ghost-dark" disabled={busy} onClick={() => onViewDetails?.(b.id)}>View details</button>
+      {b.st === 'pending-payment' && <>
+        {onPay && <button className="btn" disabled={busy} onClick={() => onPay(b.id)}>Simulate down payment</button>}
+        <button className="btn ghost-dark" disabled={busy} onClick={() => onCancel?.(b.id)}>Cancel reservation</button>
+      </>}
     </div>
-  )
+  </article>
 }

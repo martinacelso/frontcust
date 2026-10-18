@@ -1,5 +1,5 @@
 const express = require('express');
-const { timingSafeEqual } = require('node:crypto');
+const { timingSafeEqual, randomUUID } = require('node:crypto');
 const { rateLimit } = require('express-rate-limit');
 const Booking = require('../models/Booking');
 const Room = require('../models/Room');
@@ -12,8 +12,18 @@ const idOK = (id) => typeof id === 'string' && /^[a-f\d]{24}$/i.test(id);
 const view = (b) => ({ id: String(b._id), guestId: String(b.guest), roomTypeId: String(b.roomType),
   type: b.typeName, checkIn: b.checkIn, checkOut: b.checkOut, adults: b.adults, children: b.children,
   requests: b.requests, status: b.status === 'pending-payment' && b.holdUntil <= new Date() ? 'expired' : b.status,
+  checkedInAt: b.checkedInAt, checkedOutAt: b.checkedOutAt,
+  simulatedSettlement: b.simulatedSettlement?.reference ? { reference: b.simulatedSettlement.reference,
+    amountCents: b.simulatedSettlement.amountCents, recordedAt: b.simulatedSettlement.recordedAt } : null,
   holdUntil: b.holdUntil, rateCents: b.rateCents, totalCents: b.totalCents, depositCents: b.depositCents,
-  paidCents: b.paidCents, currency: b.currency, version: b.__v || 0 });
+  paidCents: b.paidCents, currency: b.currency, version: b.__v || 0,
+  simulatedPayment: b.simulatedPayment?.reference ? { reference: b.simulatedPayment.reference,
+    amountCents: b.simulatedPayment.amountCents, recordedAt: b.simulatedPayment.recordedAt } : null });
+
+router.get('/options', (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.json({ demoPaymentsEnabled: process.env.DEMO_PAYMENTS === 'true' });
+});
 
 // Always return a fresh count; this is not a guarantee until the hold is saved.
 router.get('/availability', async (req, res) => {
@@ -38,6 +48,26 @@ router.use((req, res, next) => {
 });
 const writes = rateLimit({ windowMs: 60000, limit: 20, standardHeaders: 'draft-8', legacyHeaders: false,
   message: { error: 'Too many requests. Wait a minute and try again.' } });
+
+
+// Staff receive selected contact fields only; guest responses remain unchanged.
+router.get('/staff-list', requireRoles('admin', 'front-desk'), async (req, res) => {
+  const statuses = ['pending-payment', 'expired', 'confirmed', 'checked-in', 'checked-out', 'cancelled'];
+  const status = req.query.status || '';
+  if (typeof status !== 'string' || (status && !statuses.includes(status))) return res.status(400).json({ error: 'Invalid status filter.' });
+  const page = Number(req.query.page || 1);
+  if (!Number.isInteger(page) || page < 1 || page > 10000) return res.status(400).json({ error: 'Invalid page.' });
+  const now = new Date();
+  const filter = status === 'expired' ? { status: 'pending-payment', holdUntil: { $lte: now } }
+    : status === 'pending-payment' ? { status, holdUntil: { $gt: now } } : status ? { status } : {};
+  const rows = await Booking.find(filter).sort({ createdAt: -1, _id: -1 }).skip((page - 1) * 50).limit(51);
+  const shown = rows.slice(0, 50);
+  const User = require('../models/User');
+  const users = await User.find({ _id: { $in: shown.map((b) => b.guest) } }).select('name email contactEmail phone').lean();
+  const contacts = new Map(users.map((u) => [String(u._id), { name: u.name, email: u.contactEmail || u.email, phone: u.phone || '' }]));
+  res.json({ bookings: shown.map((b) => ({ ...view(b), roomNumber: b.roomNumber,
+    createdAt: b.createdAt, guest: contacts.get(String(b.guest)) || null })), page, hasMore: rows.length > 50 });
+});
 
 router.get('/', async (req, res) => {
   const filter = req.account.role === 'guest' ? { guest: req.account._id } : {};
@@ -86,6 +116,31 @@ router.post('/', writes, requireRoles('guest'), async (req, res) => {
   res.status(201).json({ booking: view(booking) });
 });
 
+// Classroom demonstration only. Never accepts card details or a client amount.
+router.post('/:id/simulate-payment', writes, requireRoles('guest'), async (req, res) => {
+  if (process.env.DEMO_PAYMENTS !== 'true') return res.status(403).json({ error: 'Demonstration payments are disabled.' });
+  if (!idOK(req.params.id)) return res.status(400).json({ error: 'Invalid booking.' });
+  const booking = await transaction(async (session) => {
+    const old = await Booking.findOne({ _id: req.params.id, guest: req.account._id }).session(session);
+    if (!old) throw failure(404, 'Booking not found.');
+    if (old.status === 'confirmed' && old.simulatedPayment?.reference) return old;
+    if (old.status !== 'pending-payment' || old.holdUntil <= new Date()) throw failure(409, 'This hold expired or is no longer payable. Search again.');
+    const room = await Room.findOneAndUpdate({ _id: old.room, status: { $in: ['available', 'dirty'] } },
+      { $inc: { __v: 1 } }, { session, returnDocument: 'after' });
+    if (!room) throw failure(409, 'This room is unavailable. Contact the front desk.');
+    // An expired hold may have been replaced while this operation waited.
+    const overlap = await Booking.exists({ _id: { $ne: old._id }, room: old.room, ...activeFilter(),
+      checkIn: { $lt: old.checkOut }, checkOut: { $gt: old.checkIn } }).session(session);
+    if (overlap || old.holdUntil <= new Date()) throw failure(409, 'This hold is no longer available. Search again.');
+    old.simulatedPayment = { reference: 'SIM-' + randomUUID(), amountCents: old.depositCents, recordedAt: new Date() };
+    old.paidCents = old.depositCents;
+    old.status = 'confirmed'; old.__v += 1;
+    await old.save({ session });
+    return old;
+  });
+  res.json({ booking: view(booking) });
+});
+
 router.post('/:id/cancel', writes, async (req, res) => {
   const version = req.body?.version;
   if (!idOK(req.params.id) || !Number.isInteger(version) || version < 0) return res.status(400).json({ error: 'Invalid booking or version.' });
@@ -101,6 +156,55 @@ router.post('/:id/cancel', writes, async (req, res) => {
     old.status = 'cancelled'; old.cancelledAt = new Date(); old.__v += 1;
     await old.save({ session });
     return old;
+  });
+  res.json({ booking: view(booking) });
+});
+
+
+// Room and booking transitions commit together; retries cannot charge twice.
+router.post('/:id/check-in', writes, requireRoles('admin', 'front-desk'), async (req, res) => {
+  if (!idOK(req.params.id) || !Number.isInteger(req.body?.version) || req.body.version < 0) return res.status(400).json({ error: 'Invalid booking or version.' });
+  const booking = await transaction(async (session) => {
+    const b = await Booking.findOne({ _id: req.params.id }).session(session);
+    if (!b) throw failure(404, 'Booking not found.');
+    if (b.status === 'checked-in') return b;
+    if (b.__v !== req.body.version) throw failure(409, 'Booking changed. Refresh first.');
+    if (b.status !== 'confirmed') throw failure(409, 'Only confirmed reservations can check in.');
+    if (today() < b.checkIn || today() >= b.checkOut) throw failure(409, 'Check-in is allowed from arrival date until the day before departure.');
+    if (b.paidCents < b.depositCents) throw failure(409, 'The required deposit has not been recorded.');
+    const room = await Room.findOneAndUpdate({ _id: b.room, status: 'available' },
+      { $set: { status: 'occupied' }, $inc: { __v: 1 } }, { session, returnDocument: 'after' });
+    if (!room) throw failure(409, 'Assigned room must be clean and available. Refresh Housekeeping.');
+    const occupied = await Booking.exists({ _id: { $ne: b._id }, room: b.room, status: 'checked-in' }).session(session);
+    if (occupied) throw failure(409, 'Another guest is still checked into this room.');
+    b.status = 'checked-in'; b.checkedInAt = new Date(); b.checkedInBy = req.account._id; b.__v += 1;
+    await b.save({ session }); return b;
+  });
+  res.json({ booking: view(booking) });
+});
+
+router.post('/:id/check-out', writes, requireRoles('admin', 'front-desk'), async (req, res) => {
+  if (!idOK(req.params.id) || !Number.isInteger(req.body?.version) || req.body.version < 0) return res.status(400).json({ error: 'Invalid booking or version.' });
+  const booking = await transaction(async (session) => {
+    const b = await Booking.findOne({ _id: req.params.id }).session(session);
+    if (!b) throw failure(404, 'Booking not found.');
+    if (b.status === 'checked-out') return b;
+    if (b.__v !== req.body.version) throw failure(409, 'Booking changed. Refresh first.');
+    if (b.status !== 'checked-in') throw failure(409, 'Only checked-in guests can check out.');
+    const balance = Math.max(0, b.totalCents - b.paidCents);
+    if (balance && (process.env.DEMO_PAYMENTS !== 'true' || req.body.simulateBalance !== true)) throw failure(409, 'Confirm simulated balance payment before checking out.');
+    const room = await Room.findOneAndUpdate({ _id: b.room, status: 'occupied' },
+      { $set: { status: 'dirty' }, $inc: { __v: 1 } }, { session, returnDocument: 'after' });
+    if (!room) throw failure(409, 'Room status changed. Refresh and check its occupancy.');
+    const other = await Booking.exists({ _id: { $ne: b._id }, room: b.room, status: 'checked-in' }).session(session);
+    if (other) throw failure(409, 'Conflicting occupancy needs review before check-out.');
+    // Only the server calculates the outstanding amount. No real payment is taken.
+    if (balance) {
+      b.simulatedSettlement = { reference: 'SIM-' + randomUUID(), amountCents: balance, recordedAt: new Date() };
+      b.paidCents = b.totalCents;
+    }
+    b.status = 'checked-out'; b.checkedOutAt = new Date(); b.checkedOutBy = req.account._id; b.__v += 1;
+    await b.save({ session }); return b;
   });
   res.json({ booking: view(booking) });
 });
