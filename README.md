@@ -99,7 +99,7 @@ Delete actions preserve database history:
 - Guest accounts are disabled, not erased. Staff accounts can be disabled and re-enabled.
 - Cancelled or expired bookings can be archived. Only active unpaid booking holds can be edited.
 - Audit entries and generated booking messages are retained; audit entries can be archived, and inbox messages can be archived per guest.
-- Payment method and generated demo references are stored with bookings. The demo checkout does not collect card, wallet, or bank details and does not charge or transfer money. Payments, refunds, and balance settlements are not real transactions and should not be edited or deleted as if they were a financial ledger.
+- Demo checkout accepts bank transfer details only. Bank name, account holder, and account number are encrypted before storage using a key derived from `SESSION_SECRET`; only the account's last four digits are returned to the app. The demo does not verify or initiate a transfer and does not charge or move money. Payments, refunds, and balance settlements are not real transactions and should not be edited or deleted as if they were a financial ledger. Do not enter real banking details in a demo deployment.
 
 No payment gateway or SMTP email provider is configured by default. `DEMO_PAYMENTS=true` enables simulated checkout, refunds, balance settlement, and walk-in deposits for classroom/test demonstrations only. Restart the backend after changing it.
 

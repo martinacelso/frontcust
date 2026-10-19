@@ -1,4 +1,5 @@
-import PaymentMethod from './PaymentMethod'
+import BankDetailsForm from './BankDetailsForm'
+import { isBankDetailsValid } from '../../utils/bankDetails'
 import { receiptText } from '../../utils/billing'
 import { useEffect, useRef, useState } from 'react'
 import { P, useAccount } from '../../context/AccountContext'
@@ -12,7 +13,7 @@ function Dialog({ modal, onClose }) {
   const [busy, setBusy] = useState(false), [error, setError] = useState('')
   const lock = useRef(false)
   const { user } = useAccount()
-  const [method, setMethod] = useState('GCash')
+  const [bankDetails, setBankDetails] = useState({ bankName: '', accountHolder: '', accountNumber: '' })
   const [approved, setApproved] = useState(false)
   useEffect(() => {
     const previous = document.body.style.overflow
@@ -26,7 +27,7 @@ function Dialog({ modal, onClose }) {
     if (modal.type === 'simulate' && !approved) return
     lock.current = true; setBusy(true); setError('')
     try {
-      const result = await modal.onConfirm(method)
+      const result = await modal.onConfirm(bankDetails)
       if (result?.error) setError(result.error)
       else if (result !== false) onClose()
     } catch { setError('Unable to confirm the result. Check My bookings before starting another reservation.') }
@@ -49,9 +50,9 @@ function Dialog({ modal, onClose }) {
       {b?.settlement && <p>Balance payment: {P(b.settlement.amountCents / 100)} · {b.settlement.method || 'Payment'} · {b.settlement.reference}</p>}
       {b?.refund && <p role="status">Refund recorded: {P(b.refunded)} · {b.refund.method} · {b.refund.reference}. No real money moved.</p>}
       {modal.type === 'simulate' && <>
-        <PaymentMethod name="customer-demo-payment-method" value={method} onChange={(value) => { setMethod(value); setApproved(false) }} disabled={busy} />
-        <p>Down payment: <b>{P(b.deposit)}</b> using <b>{method}</b>.</p>
-        <label><input type="checkbox" checked={approved} disabled={busy} onChange={(e) => setApproved(e.target.checked)} /> I confirm this demo payment amount and method. No money will be charged.</label>
+        <BankDetailsForm value={bankDetails} onChange={(value) => { setBankDetails(value); setApproved(false) }} disabled={busy} />
+        <p>Down payment: <b>{P(b.deposit)}</b> by demo bank transfer.</p>
+        <label><input type="checkbox" checked={approved} disabled={busy} onChange={(e) => setApproved(e.target.checked)} /> I confirm these bank details for this demo payment. No money will be charged or transferred.</label>
       </>}
       {modal.type === 'cancel' && <p>This releases the reservation. Before check-in, any recorded demo deposit is marked as fully refunded. Same-day guest cancellations require staff assistance.</p>}
       {modal.type === 'cancel' && b.paid > b.refunded && <p>Demo refund amount: <b>{P(b.paid - b.refunded)}</b>. Refund recorded in your booking history; no funds are transferred.</p>}
@@ -65,7 +66,7 @@ function Dialog({ modal, onClose }) {
       }}>Download receipt</button>}
       {error && <p className="acc-error" role="alert">{error}</p>}
       <div className="acc-modal-actions"><button className="btn ghost-dark" disabled={busy} onClick={onClose}>Close</button>
-        {modal.onConfirm && <button className="btn" disabled={busy || (modal.type === 'simulate' && !approved)} onClick={confirm}>{busy ? 'Please wait…' : modal.label || 'Confirm'}</button>}
+        {modal.onConfirm && <button className="btn" disabled={busy || (modal.type === 'simulate' && (!approved || !isBankDetailsValid(bankDetails)))} onClick={confirm}>{busy ? 'Please wait…' : modal.label || 'Confirm'}</button>}
       </div>
     </div>
   </div>

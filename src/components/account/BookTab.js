@@ -12,8 +12,8 @@ export default function BookTab({ initialSearch = null, onBooked = () => {} }) {
       setModal({ type: booking.st === 'confirmed' ? 'confirmed' : 'receipt', booking }); return
     }
     setModal({ type: 'hold', booking, label: 'Continue to payment', onConfirm: demoEnabled ? () => {
-      setModal({ type: 'simulate', booking, label: 'Confirm payment', onConfirm: async (method) => {
-        const result = await simulatePayment(booking.id, method)
+      setModal({ type: 'simulate', booking, label: 'Confirm bank transfer', onConfirm: async (bankDetails) => {
+        const result = await simulatePayment(booking.id, bankDetails)
         if (result.error) return result
         setModal({ type: 'confirmed', booking: result.booking })
         return false

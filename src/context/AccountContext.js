@@ -13,7 +13,7 @@ export const nights = (a, b) => Math.max(1, Math.round((new Date(b) - new Date(a
 export const P = (n) => '₱' + Number(n).toLocaleString()
 export const DOWN_PAYMENT_RATE = 0.2
 export const downPayment = (n) => roundMoney(n * DOWN_PAYMENT_RATE)
-export const PAYMENT_METHODS = ['GCash', 'Maya', 'Card', 'Bank Transfer']
+export const PAYMENT_METHODS = ['Bank Transfer']
 export const TYPES = ROOM_TYPES
 
 export function AccountProvider({ children }) {
@@ -96,7 +96,9 @@ function AccountState({ children, auth }) {
     demoEnabled, refreshBookings,
     addBooking: (data) => mutation('/bookings', data),
     updateBooking: (id, data) => mutation('/bookings/' + id, data),
-    simulatePayment: (id, method) => mutation('/bookings/' + id + '/simulate-payment', { method }),
+    simulatePayment: (id, bankDetails) => mutation('/bookings/' + id + '/simulate-payment', {
+      method: 'Bank Transfer', bankDetails,
+    }),
     cancelBooking: (id, confirmRefund = false) => {
       const row = rows.find((b) => b.id === id)
       return row ? mutation('/bookings/' + id + '/cancel', { version: row.version, confirmRefund }) : Promise.resolve({ error: 'Booking not found. Refresh and try again.' })

@@ -23,8 +23,8 @@ export default function TripsTab() {
     } })
   }
   function pay(id) {
-    setModal({ type: 'simulate', booking: mine.find((b) => b.id === id), label: 'Confirm payment', onConfirm: async (method) => {
-      const result = await simulatePayment(id, method)
+    setModal({ type: 'simulate', booking: mine.find((b) => b.id === id), label: 'Confirm bank transfer', onConfirm: async (bankDetails) => {
+      const result = await simulatePayment(id, bankDetails)
       if (result.error) return result
       setModal({ type: 'confirmed', booking: result.booking }); return false
     } })

@@ -8,6 +8,7 @@ const RoomType = require('../models/RoomType');
 const { today, stayInput, activeFilter, quote } = require('../utils/bookingRules');
 const { transaction, failure } = require('../utils/transaction');
 const demoPaymentLabel = require('../utils/demoPayment');
+const { bankDetailsFingerprint, encryptBankDetails } = require('../utils/bankDetails');
 const router = express.Router();
 // Mounted behind the booking router's staff authorization, JSON and CSRF checks.
 const inputFor = (b) => stayInput({ ...b, checkIn: today(), adults: Number(b.adults), children: Number(b.children) });
@@ -29,13 +30,15 @@ router.post('/', rateLimit({ windowMs: 60000, limit: 20, message: { error: 'Wait
   const b = req.body || {}, input = inputFor(b), g = b.guest || {};
   if (!input || b.checkIn !== input.checkIn || !/^[a-f\d]{24}$/i.test(b.roomId || '') ||
     typeof b.requestId !== 'string' || !/^[a-f\d]{8}-[a-f\d]{4}-4[a-f\d]{3}-[89ab][a-f\d]{3}-[a-f\d]{12}$/i.test(b.requestId) ||
-    !Number.isSafeInteger(b.expectedTotalCents) || b.expectedTotalCents <= 0 || b.confirmPayment !== true ||
+    !Number.isSafeInteger(b.expectedTotalCents) || b.expectedTotalCents <= 0 || b.confirmPayment !== true || b.method !== 'Bank Transfer' ||
     typeof g.name !== 'string' || g.name.trim().length < 2 || g.name.trim().length > 100 ||
     typeof g.phone !== 'string' || !/^09\d{9}$/.test(g.phone) || typeof g.email !== 'string' ||
     g.email.length > 254 || (g.email.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(g.email.trim()))) throw failure(400, 'Review guest details, dates and payment confirmation.');
   const detailsLabel = demoPaymentLabel(b.method);
+  const bankDetails = encryptBankDetails(b.bankDetails);
+  const detailsFingerprint = bankDetailsFingerprint(b.bankDetails);
   const guest = { name: g.name.trim(), phone: g.phone, email: g.email.trim().toLowerCase() };
-  const digest = createHash('sha256').update(JSON.stringify({ input, guest, room: b.roomId, total: b.expectedTotalCents, method: b.method, detailsLabel })).digest('hex');
+  const digest = createHash('sha256').update(JSON.stringify({ input, guest, room: b.roomId, total: b.expectedTotalCents, method: b.method, detailsLabel, detailsFingerprint })).digest('hex');
   const identity = { source: 'walk-in', requestId: b.requestId, createdBy: req.account._id };
   const replay = (old) => { if (old.fingerprint !== digest) throw failure(409, 'Request already used. Reopen the form for a different stay.'); return old; };
   let booking;
@@ -57,7 +60,8 @@ router.post('/', rateLimit({ windowMs: 60000, limit: 20, message: { error: 'Wait
         room: room._id, roomType: type._id, typeName: type.name, roomNumber: room.number,
         checkIn: input.checkIn, checkOut: input.checkOut, adults: input.adults, children: input.children, requests: input.requests,
         ...price, paidCents: price.depositCents, status: 'checked-in', checkedInAt: now, checkedInBy: req.account._id, holdUntil: now,
-        simulatedPayment: { reference: 'PAY-' + randomUUID(), method: b.method, detailsLabel, amountCents: price.depositCents, recordedAt: now },
+        simulatedPayment: { ...bankDetails,
+          reference: 'PAY-' + randomUUID(), method: b.method, detailsLabel, amountCents: price.depositCents, recordedAt: now },
       }], { session });
       await bookingMail(saved, 'confirmation', session);
       return saved;

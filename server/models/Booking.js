@@ -1,5 +1,10 @@
 const mongoose = require('mongoose');
 const integerMoney = { type: Number, required: true, min: 0, validate: Number.isSafeInteger };
+const encryptedBankDetailsSchema = new mongoose.Schema({
+  iv: { type: String, required: true },
+  authTag: { type: String, required: true },
+  ciphertext: { type: String, required: true },
+}, { _id: false });
 const schema = new mongoose.Schema({
   guest: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: function () { return this.source !== 'walk-in'; }, index: true },
   source: { type: String, enum: ['online', 'walk-in'], default: 'online' },
@@ -40,6 +45,8 @@ const schema = new mongoose.Schema({
     reference: String,
     detailsLabel: { type: String, maxlength: 100 },
     method: { type: String, enum: ['GCash', 'Maya', 'Card', 'Bank Transfer'] },
+    bankDetailsEncrypted: encryptedBankDetailsSchema,
+    bankAccountLast4: { type: String, match: /^\d{4}$/ },
     amountCents: { type: Number, min: 0, validate: Number.isSafeInteger },
     recordedAt: Date,
   },
@@ -47,6 +54,8 @@ const schema = new mongoose.Schema({
     reference: String,
     detailsLabel: { type: String, maxlength: 100 },
     method: { type: String, enum: ['GCash', 'Maya', 'Card', 'Bank Transfer'] },
+    bankDetailsEncrypted: encryptedBankDetailsSchema,
+    bankAccountLast4: { type: String, match: /^\d{4}$/ },
     amountCents: { type: Number, min: 0, validate: Number.isSafeInteger },
     recordedAt: Date,
   },

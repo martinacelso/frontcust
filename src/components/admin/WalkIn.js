@@ -1,7 +1,8 @@
 import DigitInput from '../DigitInput'
 import { useEffect, useRef, useState } from 'react'
 import { bookingRequest } from '../../utils/bookingApi'
-import PaymentMethod from '../account/PaymentMethod'
+import BankDetailsForm from '../account/BankDetailsForm'
+import { isBankDetailsValid } from '../../utils/bankDetails'
 const money = (n) => new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP' }).format(n / 100)
 export default function WalkIn({ onComplete }) {
   const [open, setOpen] = useState(false)
@@ -13,7 +14,7 @@ function Form({ onClose, onComplete }) {
   const [stay, setStay] = useState({ roomTypeId: '', checkOut: '', adults: 1, children: 0, requests: '' })
   const [guest, setGuest] = useState({ name: '', phone: '', email: '' })
   const [quote, setQuote] = useState(null), [roomId, setRoomId] = useState('')
-  const [method, setMethod] = useState('GCash'), [confirmed, setConfirmed] = useState(false)
+  const [bankDetails, setBankDetails] = useState({ bankName: '', accountHolder: '', accountNumber: '' }), [confirmed, setConfirmed] = useState(false)
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [done, setDone] = useState(null)
   const [pending, setPending] = useState(null)
   const lock = useRef(false), alive = useRef(true)
@@ -44,7 +45,7 @@ function Form({ onClose, onComplete }) {
       if (!quote || !roomId || !confirmed) return
       if (guest.name.trim().length < 2 || !/^09\d{9}$/.test(guest.phone) || (guest.email.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(guest.email.trim()))) { setError('Enter guest name, 11-digit 09 mobile number, and a valid email if supplied.'); return }
       payload = { ...stay, guest, roomId, checkIn: quote.checkIn, expectedTotalCents: quote.totalCents,
-        requestId: crypto.randomUUID(), method, confirmPayment: true }
+        requestId: crypto.randomUUID(), method: 'Bank Transfer', bankDetails, confirmPayment: true }
       setPending(payload)
     }
     lock.current = true; setBusy(true); setError('')
@@ -60,9 +61,9 @@ function Form({ onClose, onComplete }) {
   }
   if (done) return <div className="admin-card" role="status"><h3>Walk-in saved — {done.status}</h3>
     <p>Room {done.roomNumber}. Booking: {done.id}</p><p>Deposit: {money(done.paidCents)}. Balance: {money(done.totalCents - done.paidCents)}</p>
-    <p>Payment reference: {done.reference}</p><button className="admin-btn" onClick={onClose}>Done</button></div>
+    <p>Demo bank transfer reference: {done.reference}. No money was transferred.</p><button className="admin-btn" onClick={onClose}>Done</button></div>
   return <div className="admin-card" style={{ padding: 20, margin: '16px 0' }}>
-    <h3>Walk-in guest</h3>    <p>Arrival is today, Philippine time. A 20% demo deposit is recorded before check-in. No money is charged.</p>
+    <h3>Walk-in guest</h3>    <p>Arrival is today, Philippine time. A 20% demo deposit is recorded before check-in. No money is transferred.</p>
     {error && <p role="alert" className="acc-error">{error}</p>}
     {!enabled && <p>Enable demo payments with DEMO_PAYMENTS=true in server/.env, then restart the backend before completing a walk-in.</p>}
     <fieldset disabled={busy || !!pending} style={{ border: 0 }}>
@@ -80,12 +81,12 @@ function Form({ onClose, onComplete }) {
       </form>
       {quote && <><p>Arrival: {quote.checkIn}. Total: {money(quote.totalCents)}. Deposit: {money(quote.depositCents)}.</p>
         {quote.rooms.length ? <label>Room <select value={roomId} onChange={(e) => { setRoomId(e.target.value); setConfirmed(false) }}>{quote.rooms.map((r) => <option key={r.id} value={r.id}>{r.number}</option>)}</select></label> : <p>No clean room is available for the entire stay.</p>}
-        {enabled && <PaymentMethod name="walk-in-demo-payment-method" value={method} onChange={(m) => { setMethod(m); setConfirmed(false) }} />}
-        <label><input type="checkbox" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} /> Confirm guest details, room and {money(quote.depositCents)} demo payment through {method}.</label>
+        {enabled && <BankDetailsForm value={bankDetails} onChange={(details) => { setBankDetails(details); setConfirmed(false) }} disabled={busy || !!pending} />}
+        <label><input type="checkbox" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} /> Confirm guest details, room and {money(quote.depositCents)} demo bank transfer.</label>
       </>}
     </fieldset>
     {pending && <p>The result is uncertain. Retry the same request to check its result without creating another booking.</p>}
-    <button className="admin-btn" disabled={busy || !enabled || (!pending && (!quote || !roomId || !confirmed))} onClick={submit}>{busy ? 'Saving…' : pending ? 'Retry same check-in' : 'Record deposit and check in'}</button>{' '}
+    <button className="admin-btn" disabled={busy || !enabled || (!pending && (!quote || !roomId || !confirmed || !isBankDetailsValid(bankDetails)))} onClick={submit}>{busy ? 'Saving…' : pending ? 'Retry same check-in' : 'Record deposit and check in'}</button>{' '}
     <button className="admin-btn" disabled={busy || !!pending} onClick={onClose}>Close</button>
   </div>
 }

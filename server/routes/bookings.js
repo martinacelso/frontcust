@@ -10,7 +10,8 @@ const { stayInput, activeFilter, fingerprint, quote, today } = require('../utils
 const { transaction, failure } = require('../utils/transaction');
 const demoPaymentLabel = require('../utils/demoPayment');
 const router = express.Router();
-const methods = ['GCash', 'Maya', 'Card', 'Bank Transfer'];
+const methods = ['Bank Transfer'];
+const { encryptBankDetails } = require('../utils/bankDetails');
 const idOK = (id) => typeof id === 'string' && /^[a-f\d]{24}$/i.test(id);
 const view = (b) => ({ id: String(b._id), guestId: b.guest ? String(b.guest) : null, roomTypeId: String(b.roomType),
   refundedCents: b.refundedCents || 0,
@@ -20,11 +21,13 @@ const view = (b) => ({ id: String(b._id), guestId: b.guest ? String(b.guest) : n
   requests: b.requests, status: b.status === 'pending-payment' && b.holdUntil <= new Date() ? 'expired' : b.status,
   checkedInAt: b.checkedInAt, checkedOutAt: b.checkedOutAt,
   simulatedSettlement: b.simulatedSettlement?.reference ? { reference: b.simulatedSettlement.reference, method: b.simulatedSettlement.method, detailsLabel: b.simulatedSettlement.detailsLabel,
-    amountCents: b.simulatedSettlement.amountCents, recordedAt: b.simulatedSettlement.recordedAt } : null,
+    amountCents: b.simulatedSettlement.amountCents, recordedAt: b.simulatedSettlement.recordedAt,
+    bankAccountLast4: b.simulatedSettlement.bankAccountLast4 } : null,
   holdUntil: b.holdUntil, rateCents: b.rateCents, totalCents: b.totalCents, depositCents: b.depositCents,
   paidCents: b.paidCents, currency: b.currency, version: b.__v || 0, archived: Boolean(b.archivedAt),
   simulatedPayment: b.simulatedPayment?.reference ? { reference: b.simulatedPayment.reference, method: b.simulatedPayment.method, detailsLabel: b.simulatedPayment.detailsLabel,
-    amountCents: b.simulatedPayment.amountCents, recordedAt: b.simulatedPayment.recordedAt } : null });
+    amountCents: b.simulatedPayment.amountCents, recordedAt: b.simulatedPayment.recordedAt,
+    bankAccountLast4: b.simulatedPayment.bankAccountLast4 } : null });
 
 router.get('/options', (req, res) => {
   res.set('Cache-Control', 'no-store');
@@ -205,6 +208,8 @@ router.post('/:id/restore', writes, requireRoles('guest', 'admin'), async (req, 
 router.post('/:id/simulate-payment', writes, requireRoles('guest'), async (req, res) => {
   if (process.env.DEMO_PAYMENTS !== 'true') return res.status(403).json({ error: 'Payments are currently unavailable.' });
   if (!idOK(req.params.id)) return res.status(400).json({ error: 'Invalid booking.' });
+  if (req.body?.method !== 'Bank Transfer') throw failure(400, 'Only bank transfer is available.');
+  const bankDetails = encryptBankDetails(req.body.bankDetails);
   const booking = await transaction(async (session) => {
     const old = await Booking.findOne({ _id: req.params.id, guest: req.account._id }).session(session);
     if (!old) throw failure(404, 'Booking not found.');
@@ -212,7 +217,7 @@ router.post('/:id/simulate-payment', writes, requireRoles('guest'), async (req, 
       if (old.simulatedPayment.method && old.simulatedPayment.method !== req.body?.method) throw failure(409, 'Payment already recorded with another method. Refresh to see its receipt.');
       return old;
     }
-    if (!methods.includes(req.body?.method)) throw failure(400, 'Choose GCash, Maya, Card or Bank Transfer.');
+    if (!methods.includes(req.body?.method)) throw failure(400, 'Only bank transfer is available.');
     const detailsLabel = demoPaymentLabel(req.body.method);
     if (old.status !== 'pending-payment' || old.holdUntil <= new Date()) throw failure(409, 'This hold expired or is no longer payable. Search again.');
     const room = await Room.findOneAndUpdate({ _id: old.room, status: { $in: ['available', 'dirty'] }, archivedAt: null },
@@ -222,7 +227,8 @@ router.post('/:id/simulate-payment', writes, requireRoles('guest'), async (req, 
     const overlap = await Booking.exists({ _id: { $ne: old._id }, room: old.room, ...activeFilter(),
       checkIn: { $lt: old.checkOut }, checkOut: { $gt: old.checkIn } }).session(session);
     if (overlap || old.holdUntil <= new Date()) throw failure(409, 'This hold is no longer available. Search again.');
-    old.simulatedPayment = { detailsLabel, method: req.body.method, reference: 'PAY-' + randomUUID(), amountCents: old.depositCents, recordedAt: new Date() };
+    old.simulatedPayment = { ...bankDetails,
+      detailsLabel, method: req.body.method, reference: 'PAY-' + randomUUID(), amountCents: old.depositCents, recordedAt: new Date() };
     old.paidCents = old.depositCents;
     old.status = 'confirmed'; old.__v += 1;
     await old.save({ session });
@@ -289,6 +295,8 @@ router.post('/:id/check-in', writes, requireRoles('admin', 'front-desk'), async 
 
 router.post('/:id/check-out', writes, requireRoles('admin', 'front-desk'), async (req, res) => {
   if (!idOK(req.params.id) || !Number.isInteger(req.body?.version) || req.body.version < 0) return res.status(400).json({ error: 'Invalid booking or version.' });
+  if (req.body?.simulateBalance === true && req.body?.method !== 'Bank Transfer') throw failure(400, 'Only bank transfer is available.');
+  const bankDetails = req.body?.simulateBalance === true ? encryptBankDetails(req.body.bankDetails) : null;
   const booking = await transaction(async (session) => {
     const b = await Booking.findOne({ _id: req.params.id }).session(session);
     if (!b) throw failure(404, 'Booking not found.');
@@ -296,7 +304,7 @@ router.post('/:id/check-out', writes, requireRoles('admin', 'front-desk'), async
     if (b.__v !== req.body.version) throw failure(409, 'Booking changed. Refresh first.');
     if (b.status !== 'checked-in') throw failure(409, 'Only checked-in guests can check out.');
     const balance = Math.max(0, b.totalCents - b.paidCents);
-    if (balance && !methods.includes(req.body?.method)) throw failure(400, 'Choose GCash, Maya, Card or Bank Transfer.');
+    if (balance && !methods.includes(req.body?.method)) throw failure(400, 'Only bank transfer is available.');
     if (balance && (process.env.DEMO_PAYMENTS !== 'true' || req.body.simulateBalance !== true)) throw failure(409, 'Confirm balance payment before checking out.');
     const detailsLabel = balance ? demoPaymentLabel(req.body.method) : undefined;
     const room = await Room.findOneAndUpdate({ _id: b.room, status: 'occupied', archivedAt: null },
@@ -306,7 +314,8 @@ router.post('/:id/check-out', writes, requireRoles('admin', 'front-desk'), async
     if (other) throw failure(409, 'Conflicting occupancy needs review before check-out.');
     // Only the server calculates the outstanding amount. No real payment is taken.
     if (balance) {
-      b.simulatedSettlement = { detailsLabel, method: req.body.method, reference: 'PAY-' + randomUUID(), amountCents: balance, recordedAt: new Date() };
+      b.simulatedSettlement = { ...bankDetails,
+        detailsLabel, method: req.body.method, reference: 'PAY-' + randomUUID(), amountCents: balance, recordedAt: new Date() };
       b.paidCents = b.totalCents;
     }
     b.status = 'checked-out'; b.checkedOutAt = new Date(); b.checkedOutBy = req.account._id; b.__v += 1;
