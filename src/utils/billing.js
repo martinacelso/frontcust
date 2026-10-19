@@ -5,21 +5,24 @@ export function balanceDue(booking) {
 }
 export function paymentEntries(booking) {
   return [
-    booking.simulatedPayment?.reference && { ...booking.simulatedPayment, label: 'Simulated deposit' },
-    booking.simulatedSettlement?.reference && { ...booking.simulatedSettlement, label: 'Simulated balance payment' },
+    booking.simulatedPayment?.reference && { ...booking.simulatedPayment, label: 'Deposit' },
+    booking.simulatedSettlement?.reference && { ...booking.simulatedSettlement, label: 'Balance payment' },
+    booking.simulatedRefund?.reference && { ...booking.simulatedRefund, amountCents: -booking.simulatedRefund.amountCents, label: 'Refund' },
   ].filter(Boolean)
 }
 export function pageTotals(bookings) {
   return bookings.reduce((sum, b) => ({
     paid: sum.paid + b.paidCents,
+    refunded: sum.refunded + (b.refundedCents || 0),
+    net: sum.net + b.paidCents - (b.refundedCents || 0),
     balance: sum.balance + balanceDue(b),
-  }), { paid: 0, balance: 0 })
+  }), { paid: 0, refunded: 0, net: 0, balance: 0 })
 }
 export function receiptText(b) {
   const entries = paymentEntries(b)
   return [
-    'BOOKING PAYMENT SUMMARY',
-    'Project demonstration — not an official receipt. No real money was collected.',
+    'PAYMENT RECEIPT',
+    'Booking payment record — not an official receipt. No funds were transferred.',
     '',
     `Booking reference: ${b.id}`,
     `Guest: ${b.guest?.name || 'Unavailable'}`,
@@ -28,10 +31,12 @@ export function receiptText(b) {
     `Status: ${b.status}`,
     `Booked price: ${money(b.totalCents)}`,
     `Recorded payments: ${money(b.paidCents)}`,
+    `Refunded: ${money(b.refundedCents || 0)}`,
+    `Net retained: ${money(b.paidCents - (b.refundedCents || 0))}`,
     `Outstanding balance: ${money(balanceDue(b))}`,
     '',
     'PAYMENT RECORDS',
-    ...entries.map((p) => `${p.label}: ${money(p.amountCents)}\nReference: ${p.reference}\nRecorded: ${new Date(p.recordedAt).toLocaleString('en-PH', { timeZone: 'Asia/Manila' })} (Philippine time)`),
+    ...entries.map((p) => `${p.label} — ${p.detailsLabel || p.method || 'Method not recorded'}: ${money(p.amountCents)}\nReference: ${p.reference}\nRecorded: ${new Date(p.recordedAt).toLocaleString('en-PH', { timeZone: 'Asia/Manila' })} (Philippine time)`),
     ...(!entries.length ? ['No payment records.'] : []),
     '',
     'Pending holds, expired holds and cancelled bookings are excluded from outstanding balance.',

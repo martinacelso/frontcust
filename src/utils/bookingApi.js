@@ -25,7 +25,7 @@ export function accountBooking(b) {
         id: b.id, type: b.type, in: b.checkIn, out: b.checkOut, g: b.adults + b.children,
         st: b.status, note: b.requests, total: b.totalCents / 100, roomCharge: b.totalCents / 100,
         paid: b.paidCents / 100, deposit: b.depositCents / 100, holdUntil: b.holdUntil,
-        version: b.version, simulation: b.simulatedPayment, extras: [], disc: 0, refunded: 0
+        version: b.version, simulation: b.simulatedPayment, settlement: b.simulatedSettlement, refund: b.simulatedRefund, extras: [], disc: 0, refunded: (b.refundedCents || 0) / 100
     }
 }
 export const bookingStatus = (b, now = Date.now()) => b.st === 'pending-payment' && Date.parse(b.holdUntil) <= now ? 'expired' : b.st

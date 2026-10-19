@@ -1,7 +1,9 @@
+import GuestInbox from './GuestInbox'
+import DigitInput from '../DigitInput'
 import { useState, useRef } from 'react'
 import { useAccount, nights, P } from '../../context/AccountContext'
 
-import { phMobileError } from '../../utils/validation'
+import { phMobileError, emailError } from '../../utils/validation'
 import { hotelDate } from '../../utils/hotel'
 
 export default function ProfileTab() {
@@ -55,6 +57,8 @@ export default function ProfileTab() {
     setSaved(false)
     setPhoneTouched(true)
     setProfileError('')
+    const emailIssue = emailError(email) || emailError(contactEmail)
+    if (emailIssue) return setProfileError(emailIssue)
     const phoneIssue = phMobileError(phone)
     if (phoneIssue) return setProfileError(phoneIssue)
     saveLock.current = true
@@ -138,6 +142,7 @@ export default function ProfileTab() {
 
         {/* RIGHT: forms */}
         <div className="profile-main">
+          <GuestInbox key={user.id || user.guestId} />
           <div className="acc-card profile-card">
             <div className="profile-card-header">
               <h3>Personal information</h3>
@@ -166,26 +171,26 @@ export default function ProfileTab() {
                 <input id="profile-current-password" type="password" autoComplete="current-password" value={profilePassword} onChange={(e) => setProfilePassword(e.target.value)} />
               </div>}
               <div>
-                <label>Contact email</label>
-                <input type="email" value={contactEmail} onChange={(e) => setContactEmail(e.target.value)} />
-                <p className="acc-muted acc-small">The hotel uses this for your reservation details. Staff changes to it do not change your login email.</p>
+                <label htmlFor="booking-contact-email">Booking email address</label>
+                <input id="booking-contact-email" type="email" autoComplete="email" required maxLength={254} value={contactEmail} onChange={(e) => setContactEmail(e.target.value)} />
+                <p className="acc-muted acc-small">This address appears on your booking messages below. Messages stay inside your profile; no external email is sent.</p>
               </div>
               <div>
                 <label htmlFor="profile-phone">Philippine mobile number</label>
-                <input
+                <DigitInput
                   id="profile-phone"
                   type="tel"
                   inputMode="tel"
                   autoComplete="tel"
                   maxLength={16}
-                  placeholder="09171234567"
+                  placeholder="0911 222 1233"
                   value={phone}
-                  onChange={(e) => { setPhone(e.target.value); setSaved(false); setProfileError('') }}
+                  onValueChange={(value) => { setPhone(value); setSaved(false); setProfileError('') }}
                   onBlur={() => setPhoneTouched(true)}
                   aria-invalid={Boolean(phoneMessage)}
                   aria-describedby="profile-phone-help profile-phone-error"
                 />
-                <p id="profile-phone-help" className="acc-muted acc-small">Optional. Use 09171234567 or +639171234567.</p>
+                <p id="profile-phone-help" className="acc-muted acc-small">Optional. Enter 11 digits starting with 09, shown as 0911 222 1233.</p>
                 <p id="profile-phone-error" className="acc-error" aria-live="polite">{phoneMessage}</p>
               </div>
             </div>

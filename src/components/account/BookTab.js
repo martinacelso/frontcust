@@ -11,9 +11,9 @@ export default function BookTab({ initialSearch = null, onBooked = () => {} }) {
     if (booking.st !== 'pending-payment') {
       setModal({ type: booking.st === 'confirmed' ? 'confirmed' : 'receipt', booking }); return
     }
-    setModal({ type: 'hold', booking, label: 'Continue to simulated payment', onConfirm: demoEnabled ? () => {
-      setModal({ type: 'simulate', booking, label: 'Simulate down payment', onConfirm: async () => {
-        const result = await simulatePayment(booking.id)
+    setModal({ type: 'hold', booking, label: 'Continue to payment', onConfirm: demoEnabled ? () => {
+      setModal({ type: 'simulate', booking, label: 'Confirm payment', onConfirm: async (method, paymentDetails) => {
+        const result = await simulatePayment(booking.id, method, paymentDetails)
         if (result.error) return result
         setModal({ type: 'confirmed', booking: result.booking })
         return false
@@ -38,7 +38,7 @@ export default function BookTab({ initialSearch = null, onBooked = () => {} }) {
     <h2 className="acc-section-title">Find your room</h2>
     {initialSearch?.type && <p>Your selected room was {initialSearch.type}. Check the current availability below.</p>}
     <p className="acc-muted">Prices below are standard room rates. Promotional discounts are not applied in this booking flow yet.</p>
-    {!demoEnabled && <p className="acc-muted">Payment simulation is currently disabled. Reservations remain unpaid until it is enabled.</p>}
+    {!demoEnabled && <p className="acc-muted">Payments are currently unavailable. Reservations remain unpaid until payments are enabled.</p>}
     <RoomSearch initialSearch={initialSearch} onChoose={choose} disabled={!!modal} />
     <BookingModal modal={modal} onClose={() => setModal(null)} />
   </>

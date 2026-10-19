@@ -1,3 +1,4 @@
+const bookingMail = require('../utils/bookingMail');
 const express = require('express');
 const { timingSafeEqual, randomUUID } = require('node:crypto');
 const { rateLimit } = require('express-rate-limit');
@@ -7,17 +8,22 @@ const RoomType = require('../models/RoomType');
 const { authenticated, requireRoles } = require('../middleware/auth');
 const { stayInput, activeFilter, fingerprint, quote, today } = require('../utils/bookingRules');
 const { transaction, failure } = require('../utils/transaction');
+const paymentDetailsLabel = require('../utils/paymentDetails');
 const router = express.Router();
+const methods = ['GCash', 'Maya', 'Card', 'Bank Transfer'];
 const idOK = (id) => typeof id === 'string' && /^[a-f\d]{24}$/i.test(id);
-const view = (b) => ({ id: String(b._id), guestId: String(b.guest), roomTypeId: String(b.roomType),
+const view = (b) => ({ id: String(b._id), guestId: b.guest ? String(b.guest) : null, roomTypeId: String(b.roomType),
+  refundedCents: b.refundedCents || 0,
+  simulatedRefund: b.simulatedRefund?.reference ? { reference: b.simulatedRefund.reference, method: b.simulatedRefund.method,
+    originalReference: b.simulatedRefund.originalReference, amountCents: b.simulatedRefund.amountCents, recordedAt: b.simulatedRefund.recordedAt } : null,
   type: b.typeName, checkIn: b.checkIn, checkOut: b.checkOut, adults: b.adults, children: b.children,
   requests: b.requests, status: b.status === 'pending-payment' && b.holdUntil <= new Date() ? 'expired' : b.status,
   checkedInAt: b.checkedInAt, checkedOutAt: b.checkedOutAt,
-  simulatedSettlement: b.simulatedSettlement?.reference ? { reference: b.simulatedSettlement.reference,
+  simulatedSettlement: b.simulatedSettlement?.reference ? { reference: b.simulatedSettlement.reference, method: b.simulatedSettlement.method, detailsLabel: b.simulatedSettlement.detailsLabel,
     amountCents: b.simulatedSettlement.amountCents, recordedAt: b.simulatedSettlement.recordedAt } : null,
   holdUntil: b.holdUntil, rateCents: b.rateCents, totalCents: b.totalCents, depositCents: b.depositCents,
   paidCents: b.paidCents, currency: b.currency, version: b.__v || 0,
-  simulatedPayment: b.simulatedPayment?.reference ? { reference: b.simulatedPayment.reference,
+  simulatedPayment: b.simulatedPayment?.reference ? { reference: b.simulatedPayment.reference, method: b.simulatedPayment.method, detailsLabel: b.simulatedPayment.detailsLabel,
     amountCents: b.simulatedPayment.amountCents, recordedAt: b.simulatedPayment.recordedAt } : null });
 
 router.get('/options', (req, res) => {
@@ -50,6 +56,8 @@ const writes = rateLimit({ windowMs: 60000, limit: 20, standardHeaders: 'draft-8
   message: { error: 'Too many requests. Wait a minute and try again.' } });
 
 
+router.use('/walk-in', requireRoles('admin', 'front-desk'), require('./walkIn'));
+
 // Staff receive selected contact fields only; guest responses remain unchanged.
 router.get('/staff-list', requireRoles('admin', 'front-desk'), async (req, res) => {
   const statuses = ['pending-payment', 'expired', 'confirmed', 'checked-in', 'checked-out', 'cancelled'];
@@ -66,7 +74,7 @@ router.get('/staff-list', requireRoles('admin', 'front-desk'), async (req, res) 
   const users = await User.find({ _id: { $in: shown.map((b) => b.guest) } }).select('name email contactEmail phone').lean();
   const contacts = new Map(users.map((u) => [String(u._id), { name: u.name, email: u.contactEmail || u.email, phone: u.phone || '' }]));
   res.json({ bookings: shown.map((b) => ({ ...view(b), roomNumber: b.roomNumber,
-    createdAt: b.createdAt, guest: contacts.get(String(b.guest)) || null })), page, hasMore: rows.length > 50 });
+    createdAt: b.createdAt, guest: b.source === 'walk-in' ? b.walkInGuest : contacts.get(String(b.guest)) || null })), page, hasMore: rows.length > 50 });
 });
 
 router.get('/', async (req, res) => {
@@ -118,12 +126,17 @@ router.post('/', writes, requireRoles('guest'), async (req, res) => {
 
 // Classroom demonstration only. Never accepts card details or a client amount.
 router.post('/:id/simulate-payment', writes, requireRoles('guest'), async (req, res) => {
-  if (process.env.DEMO_PAYMENTS !== 'true') return res.status(403).json({ error: 'Demonstration payments are disabled.' });
+  if (process.env.DEMO_PAYMENTS !== 'true') return res.status(403).json({ error: 'Payments are currently unavailable.' });
   if (!idOK(req.params.id)) return res.status(400).json({ error: 'Invalid booking.' });
   const booking = await transaction(async (session) => {
     const old = await Booking.findOne({ _id: req.params.id, guest: req.account._id }).session(session);
     if (!old) throw failure(404, 'Booking not found.');
-    if (old.status === 'confirmed' && old.simulatedPayment?.reference) return old;
+    if (old.simulatedPayment?.reference && ['confirmed', 'checked-in', 'checked-out'].includes(old.status)) {
+      if (old.simulatedPayment.method && old.simulatedPayment.method !== req.body?.method) throw failure(409, 'Payment already recorded with another method. Refresh to see its receipt.');
+      return old;
+    }
+    if (!methods.includes(req.body?.method)) throw failure(400, 'Choose GCash, Maya, Card or Bank Transfer.');
+    const detailsLabel = paymentDetailsLabel(req.body.method, req.body.paymentDetails);
     if (old.status !== 'pending-payment' || old.holdUntil <= new Date()) throw failure(409, 'This hold expired or is no longer payable. Search again.');
     const room = await Room.findOneAndUpdate({ _id: old.room, status: { $in: ['available', 'dirty'] } },
       { $inc: { __v: 1 } }, { session, returnDocument: 'after' });
@@ -132,10 +145,11 @@ router.post('/:id/simulate-payment', writes, requireRoles('guest'), async (req, 
     const overlap = await Booking.exists({ _id: { $ne: old._id }, room: old.room, ...activeFilter(),
       checkIn: { $lt: old.checkOut }, checkOut: { $gt: old.checkIn } }).session(session);
     if (overlap || old.holdUntil <= new Date()) throw failure(409, 'This hold is no longer available. Search again.');
-    old.simulatedPayment = { reference: 'SIM-' + randomUUID(), amountCents: old.depositCents, recordedAt: new Date() };
+    old.simulatedPayment = { detailsLabel, method: req.body.method, reference: 'PAY-' + randomUUID(), amountCents: old.depositCents, recordedAt: new Date() };
     old.paidCents = old.depositCents;
     old.status = 'confirmed'; old.__v += 1;
     await old.save({ session });
+    await bookingMail(old, 'confirmation', session);
     return old;
   });
   res.json({ booking: view(booking) });
@@ -150,11 +164,24 @@ router.post('/:id/cancel', writes, async (req, res) => {
     if (!old) throw failure(404, 'Booking not found.');
     if (old.status === 'cancelled') return old;
     if (old.__v !== version) throw failure(409, 'Booking changed. Refresh before cancelling.');
-    if (!['pending-payment', 'confirmed'].includes(old.status) || old.paidCents > 0) throw failure(409, 'Contact the front desk to review this booking and any payment.');
+    if (!['pending-payment', 'confirmed'].includes(old.status)) throw failure(409, 'Only reservations before check-in can be cancelled.');
+    const refund = old.paidCents - (old.refundedCents || 0);
+    if (refund < 0) throw failure(409, 'Payment records need review before cancellation.');
+    if (refund > 0) {
+      if (process.env.DEMO_PAYMENTS !== 'true' || req.body.confirmRefund !== true) throw failure(409, 'Confirm the refund before cancelling this paid reservation.');
+      if (!old.simulatedPayment?.reference || old.simulatedSettlement?.reference || old.simulatedPayment.amountCents !== old.paidCents || old.simulatedRefund?.reference) throw failure(409, 'Payment records need review before cancellation.');
+    }
     if (req.account.role === 'guest' && old.status === 'confirmed' && old.checkIn <= today()) throw failure(409, 'Contact the front desk for arrivals due today.');
     await Room.updateOne({ _id: old.room }, { $inc: { __v: 1 } }, { session });
+    // Refund and cancellation commit together. The original payment stays in history.
+    if (refund > 0) {
+      old.simulatedRefund = { reference: 'REF-' + randomUUID(), method: old.simulatedPayment.method || 'Original payment method',
+        originalReference: old.simulatedPayment.reference, amountCents: refund, recordedAt: new Date() };
+      old.refundedCents = old.paidCents;
+    }
     old.status = 'cancelled'; old.cancelledAt = new Date(); old.__v += 1;
     await old.save({ session });
+    await bookingMail(old, 'cancellation', session);
     return old;
   });
   res.json({ booking: view(booking) });
@@ -192,7 +219,9 @@ router.post('/:id/check-out', writes, requireRoles('admin', 'front-desk'), async
     if (b.__v !== req.body.version) throw failure(409, 'Booking changed. Refresh first.');
     if (b.status !== 'checked-in') throw failure(409, 'Only checked-in guests can check out.');
     const balance = Math.max(0, b.totalCents - b.paidCents);
-    if (balance && (process.env.DEMO_PAYMENTS !== 'true' || req.body.simulateBalance !== true)) throw failure(409, 'Confirm simulated balance payment before checking out.');
+    if (balance && !methods.includes(req.body?.method)) throw failure(400, 'Choose GCash, Maya, Card or Bank Transfer.');
+    if (balance && (process.env.DEMO_PAYMENTS !== 'true' || req.body.simulateBalance !== true)) throw failure(409, 'Confirm balance payment before checking out.');
+    const detailsLabel = balance ? paymentDetailsLabel(req.body.method, req.body.paymentDetails) : undefined;
     const room = await Room.findOneAndUpdate({ _id: b.room, status: 'occupied' },
       { $set: { status: 'dirty' }, $inc: { __v: 1 } }, { session, returnDocument: 'after' });
     if (!room) throw failure(409, 'Room status changed. Refresh and check its occupancy.');
@@ -200,11 +229,12 @@ router.post('/:id/check-out', writes, requireRoles('admin', 'front-desk'), async
     if (other) throw failure(409, 'Conflicting occupancy needs review before check-out.');
     // Only the server calculates the outstanding amount. No real payment is taken.
     if (balance) {
-      b.simulatedSettlement = { reference: 'SIM-' + randomUUID(), amountCents: balance, recordedAt: new Date() };
+      b.simulatedSettlement = { detailsLabel, method: req.body.method, reference: 'PAY-' + randomUUID(), amountCents: balance, recordedAt: new Date() };
       b.paidCents = b.totalCents;
     }
     b.status = 'checked-out'; b.checkedOutAt = new Date(); b.checkedOutBy = req.account._id; b.__v += 1;
-    await b.save({ session }); return b;
+    await b.save({ session });
+    await bookingMail(b, 'checkout', session); return b;
   });
   res.json({ booking: view(booking) });
 });

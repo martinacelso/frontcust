@@ -62,7 +62,7 @@ const seedBookings = [
 const seedPerms = {
   Admin: ['dash', 'rooms', 'book', 'guests', 'chk', 'bill', 'hk', 'rep', 'staff', 'audit'],
   Manager: ['dash', 'rooms', 'book', 'guests', 'chk', 'bill', 'hk', 'rep'],
-  'Front Desk': ['dash', 'book', 'guests', 'chk', 'bill'],
+  'Front Desk': ['dash', 'rooms', 'book', 'guests', 'chk', 'bill'],
   Housekeeping: ['dash', 'hk'],
 }
 

@@ -1,296 +1,90 @@
-import { guestError } from '../../utils/validation'
-import { useState } from 'react'
-import { useAdmin, P } from '../../context/AdminContext'
-
-const ID_TYPES = ['Passport', 'Driver’s License', 'National ID', 'SSS/UMID', 'Other']
-
+import { formatDigits } from '../../utils/digitFormatting'
+import DigitInput from '../DigitInput'
+import { useEffect, useRef, useState } from 'react'
+import { useAdmin } from '../../context/AdminContext'
+import { bookingRequest, STATUS_LABELS } from '../../utils/bookingApi'
+const money = (n) => new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP' }).format(n / 100)
 export default function GuestsModule() {
-  const {
-    guests, bookings, setGuests, by, total, nextId, logAction, can,
-  } = useAdmin()
-
-  const [search, setSearch] = useState('')
-  const [editModal, setEditModal] = useState(null)
-  const [profileId, setProfileId] = useState(null)
-
-  const filtered = guests.filter((g) =>
-    (g.name + (g.email || '') + (g.phone || ''))
-      .toLowerCase()
-      .includes(search.toLowerCase())
-  )
-
-  function openEdit(id) {
-    if (!id) {
-      setEditModal({
-        id: 0,
-        firstName: '',
-        lastName: '',
-        phone: '',
-        email: '',
-        idType: 'Passport',
-        idNumber: '',
-      })
-    } else {
-      const g = by('guests', id)
-      const parts = (g.name || '').split(' ')
-      const lastName = parts.length > 1 ? parts.pop() : ''
-      const firstName = parts.join(' ')
-      setEditModal({
-        id: g.id,
-        firstName,
-        lastName,
-        phone: g.phone || '',
-        email: g.email || '',
-        idType: g.idType || 'Passport',
-        idNumber: g.idNumber || '',
-      })
-    }
+  const { sessionUser } = useAdmin()
+  if (!sessionUser || !['admin', 'front-desk'].includes(sessionUser.role)) return <p role="alert">Staff sign-in required.</p>
+  return <Guests key={sessionUser.id} />
+}
+function Guests() {
+  const [search, setSearch] = useState(''), [q, setQ] = useState('')
+  const [page, setPage] = useState(1), [rows, setRows] = useState([]), [more, setMore] = useState(false)
+  const [busy, setBusy] = useState(true), [error, setError] = useState(''), [reload, setReload] = useState(0)
+  const [selected, setSelected] = useState(null)
+  useEffect(() => {
+    let current = true; setBusy(true); setError(''); setRows([])
+    bookingRequest(`/guests?q=${encodeURIComponent(q)}&page=${page}`).then((r) => {
+      if (!current) return
+      if (r.error) setError(r.error)
+      else { setRows(r.guests); setMore(r.hasMore) }
+      setBusy(false)
+    })
+    return () => { current = false }
+  }, [q, page, reload])
+  return <>
+    <form className="admin-row" style={{ gap: 12 }} onSubmit={(e) => { e.preventDefault(); setQ(/^[\d\s]+$/.test(search) ? search.replace(/\s/g, '') : search.trim()); setPage(1); setReload((n) => n + 1) }}>
+      <label>Search guests <input value={search} maxLength={100} disabled={!!selected} placeholder="Name, email or phone" onChange={(e) => setSearch(e.target.value)} /></label>
+      <button className="admin-btn" disabled={busy || !!selected}>Search / refresh</button>
+    </form>
+    <p>Registered guest accounts. Guests create accounts through Sign up; staff can update their contact details here.</p>
+    {error && <p role="alert" className="acc-error">{error}</p>}
+    <div className="admin-table-wrap"><table className="admin-table"><thead><tr><th>Name</th><th>Contact email</th><th>Phone</th><th>Account</th><th>Action</th></tr></thead>
+      <tbody>{rows.map((g) => <tr key={g.id}><td>{g.name}</td><td>{g.contactEmail}</td><td>{formatDigits(g.phone) || 'Unavailable'}</td><td>{g.active ? 'Active' : 'Inactive'}</td><td><button className="admin-link" disabled={!!selected} onClick={() => setSelected(g.id)}>Profile and bookings</button></td></tr>)}
+        {!rows.length && <tr><td colSpan="5">{busy ? 'Loading…' : error ? 'Guest records unavailable.' : 'No matching guests.'}</td></tr>}</tbody></table></div>
+    <div className="admin-row" style={{ gap: 12, marginTop: 12 }}><button className="admin-btn" disabled={busy || !!selected || page === 1} onClick={() => setPage((p) => p - 1)}>Previous</button><span>Page {page}</span>
+      <button className="admin-btn" disabled={busy || !!selected || !!error || !more} onClick={() => setPage((p) => p + 1)}>Next</button></div>
+    {/* ---- Profile modal ---- */}
+    {selected && <Profile key={selected} id={selected} onClose={() => { setSelected(null); setReload((n) => n + 1) }} />}
+  </>
+}
+function Profile({ id, onClose }) {
+  const [data, setData] = useState(null), [form, setForm] = useState(null), [page, setPage] = useState(1)
+  const [loading, setLoading] = useState(true), [saving, setSaving] = useState(false), [error, setError] = useState(''), [message, setMessage] = useState('')
+  const lock = useRef(false)
+  useEffect(() => {
+    let current = true; setLoading(true); setData(null); setForm(null); setError('')
+    bookingRequest(`/guests/${id}/bookings?page=${page}`).then((r) => {
+      if (!current) return
+      if (r.error) setError(r.error)
+      else { setData(r); setForm(r.guest) }
+      setLoading(false)
+    })
+    return () => { current = false }
+  }, [id, page])
+  async function save(e) {
+    e.preventDefault(); if (lock.current) return
+    lock.current = true; setSaving(true); setError(''); setMessage('')
+    try {
+      const r = await bookingRequest(`/guests/${id}/contact`, { name: form.name, phone: form.phone, contactEmail: form.contactEmail, updatedAt: form.updatedAt })
+      if (r.error) setError(r.error)
+      else { setForm(r.guest); setData((old) => ({ ...old, guest: r.guest })); setMessage('Guest contact details saved.') }
+    } finally { lock.current = false; setSaving(false) }
   }
-
-  function saveEdit() {
-    if (!can('guests')) return window.alert('You do not have permission to edit guests.')
-    const error = guestError(editModal)
-    if (error) return window.alert(error)
-    if (!editModal.firstName.trim()) return window.alert('First name is required.')
-    if (!editModal.lastName.trim()) return window.alert('Last name is required.')
-    if (!editModal.phone.trim()) return window.alert('Phone is required.')
-    if (!editModal.email.trim()) return window.alert('Email is required.')
-    if (!editModal.idType) return window.alert('ID type is required.')
-    if (!editModal.idNumber.trim()) return window.alert('ID number is required.')
-
-    const fullName = `${editModal.firstName.trim()} ${editModal.lastName.trim()}`
-
-    if (editModal.id) {
-      logAction('Edited guest', fullName, 'Guest contact details updated')
-      setGuests((prev) =>
-        prev.map((g) =>
-          g.id === editModal.id
-            ? {
-                ...g,
-                name: fullName,
-                phone: editModal.phone.trim(),
-                email: editModal.email.trim(),
-                idType: editModal.idType,
-                idNumber: editModal.idNumber.trim(),
-              }
-            : g
-        )
-      )
-    } else {
-      logAction('Registered guest', fullName, 'Guest contact details updated')
-      setGuests((prev) => [
-        ...prev,
-        {
-          id: nextId(),
-          name: fullName,
-          phone: editModal.phone.trim(),
-          email: editModal.email.trim(),
-          idType: editModal.idType,
-          idNumber: editModal.idNumber.trim(),
-        },
-      ])
-    }
-    setEditModal(null)
-  }
-
-  const upd = (key, value) => setEditModal((m) => ({ ...m, [key]: value }))
-
-  const profileGuest = profileId ? by('guests', profileId) : null
-  const profileBookings = profileId
-    ? bookings.filter((b) => b.g === profileId)
-    : []
-
-  return (
-    <>
-      <div className="admin-row">
-        <div>
-          <input
-            placeholder="Search guests by name, email, phone…"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-          />
-        </div>
-        <div>
-          <button className="admin-btn" onClick={() => openEdit(0)}>
-            + Register guest
-          </button>
-        </div>
+  const dirty = form && data && ['name', 'phone', 'contactEmail'].some((key) => form[key] !== data.guest[key])
+  return <section style={{ border: '1px solid #ddd', borderRadius: 12, padding: 20, marginTop: 20 }}>
+    <h3>Guest profile</h3>
+    {loading && <p>Loading profile…</p>}{error && <p role="alert" className="acc-error">{error}</p>}{message && <p role="status" className="acc-saved">{message}</p>}
+    {/* ---- Add/edit modal ---- */}
+    {form && <form onSubmit={save}>
+      <p>Login email: {data.guest.email}</p>
+      <div style={{ display: 'grid', gap: 12 }}>
+        {['name', 'contactEmail', 'phone'].map((key) => <label key={key}>{({ name: 'Full name', contactEmail: 'Contact email', phone: 'Mobile number (optional)' })[key]}
+          {key === 'phone' ? <DigitInput style={{ display: 'block' }} value={form.phone} disabled={saving} placeholder="0911 222 1233" onValueChange={(phone) => setForm((old) => ({ ...old, phone }))} /> : <input style={{ display: 'block' }} type={key === 'contactEmail' ? 'email' : key === 'phone' ? 'tel' : 'text'} required={key !== 'phone'} maxLength={key === 'phone' ? 11 : key === 'name' ? 100 : 254} value={form[key]} disabled={saving} onChange={(e) => setForm((old) => ({ ...old, [key]: e.target.value }))} />}
+        </label>)}
       </div>
-
-      <div className="admin-table-wrap">
-        <table className="admin-table">
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Phone</th>
-              <th>Email</th>
-              <th>ID</th>
-              <th>Stays</th>
-              <th />
-            </tr>
-          </thead>
-          <tbody>
-            {filtered.length === 0 ? (
-              <tr><td colSpan="6" className="admin-muted">No guests found.</td></tr>
-            ) : (
-              filtered.map((g) => {
-                const stays = bookings.filter(
-                  (b) => b.g === g.id && b.st !== 'cancelled'
-                ).length
-                return (
-                  <tr key={g.id}>
-                    <td>{g.name}</td>
-                    <td>{g.phone}</td>
-                    <td>{g.email}</td>
-                    <td className="admin-muted">
-                      {g.idType ? `${g.idType}${g.idNumber ? ' · ' + g.idNumber : ''}` : '—'}
-                    </td>
-                    <td>{stays}</td>
-                    <td>
-                      <button className="admin-link" onClick={() => setProfileId(g.id)}>
-                        Profile
-                      </button>
-                      <button className="admin-link" onClick={() => openEdit(g.id)}>
-                        Edit
-                      </button>
-                    </td>
-                  </tr>
-                )
-              })
-            )}
-          </tbody>
-        </table>
-      </div>
-
-      {/* ---- Add/edit modal ---- */}
-      {editModal && (
-        <div className="acc-modal-overlay" onClick={() => setEditModal(null)}>
-          <div className="acc-modal acc-modal-wide" onClick={(e) => e.stopPropagation()}>
-            <h3>{editModal.id ? 'Edit guest' : 'Register guest'}</h3>
-
-            <div className="form-section-title">Personal details</div>
-            <div className="form-grid">
-              <div>
-                <label>First name *</label>
-                <input
-                  value={editModal.firstName}
-                  onChange={(e) => upd('firstName', e.target.value)}
-                />
-              </div>
-              <div>
-                <label>Last name *</label>
-                <input
-                  value={editModal.lastName}
-                  onChange={(e) => upd('lastName', e.target.value)}
-                />
-              </div>
-              <div>
-                <label>Phone *</label>
-                <input
-                  value={editModal.phone}
-                  onChange={(e) => upd('phone', e.target.value)}
-                />
-              </div>
-              <div>
-                <label>Contact email *</label>
-                <input
-                  type="email"
-                  value={editModal.email}
-                  onChange={(e) => upd('email', e.target.value)}
-                />
-              </div>
-            </div>
-
-            <p className="acc-muted acc-small">This is the reservation contact email. Editing it does not change an online account’s login email or ownership.</p>
-            <div className="form-section-title">Identification</div>
-            <div className="form-grid">
-              <div>
-                <label>ID type *</label>
-                <select
-                  value={editModal.idType}
-                  onChange={(e) => upd('idType', e.target.value)}
-                >
-                  {ID_TYPES.map((t) => (
-                    <option key={t} value={t}>{t}</option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label>ID number *</label>
-                <input
-                  value={editModal.idNumber}
-                  onChange={(e) => upd('idNumber', e.target.value)}
-                />
-              </div>
-            </div>
-
-            <div className="acc-modal-actions">
-              <button className="btn ghost-dark" onClick={() => setEditModal(null)}>Cancel</button>
-              <button className="btn" onClick={saveEdit}>Save</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ---- Profile modal ---- */}
-      {profileGuest && (
-        <div className="acc-modal-overlay" onClick={() => setProfileId(null)}>
-          <div className="acc-modal" onClick={(e) => e.stopPropagation()}>
-            <h3>{profileGuest.name}</h3>
-
-            <div className="form-grid" style={{ marginTop: 12 }}>
-              <div>
-                <label>Phone</label>
-                <div className="acc-muted">{profileGuest.phone || '—'}</div>
-              </div>
-              <div>
-                <label>Email</label>
-                <div className="acc-muted">{profileGuest.email || '—'}</div>
-              </div>
-              <div>
-                <label>ID type</label>
-                <div className="acc-muted">{profileGuest.idType || '—'}</div>
-              </div>
-              <div>
-                <label>ID number</label>
-                <div className="acc-muted">{profileGuest.idNumber || '—'}</div>
-              </div>
-            </div>
-
-            <h4 className="admin-h4">Booking history</h4>
-            <div className="admin-table-wrap">
-              <table className="admin-table">
-                <thead>
-                  <tr>
-                    <th>Ref</th>
-                    <th>Dates</th>
-                    <th>Status</th>
-                    <th>Total</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {profileBookings.length === 0 ? (
-                    <tr><td colSpan="4" className="admin-muted">No bookings yet.</td></tr>
-                  ) : (
-                    profileBookings.map((b) => (
-                      <tr key={b.id}>
-                        <td>#{b.id}</td>
-                        <td>{b.in} → {b.out}</td>
-                        <td><span className={`admin-badge ${b.st}`}>{b.st}</span></td>
-                        <td>{P(total(b))}</td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
-
-            <div className="acc-modal-actions">
-              <button className="btn" onClick={() => setProfileId(null)}>Close</button>
-            </div>
-          </div>
-        </div>
-      )}
-    </>
-  )
+      <button className="admin-btn" style={{ marginTop: 12 }} disabled={saving || !dirty}>{saving ? 'Saving…' : 'Save contact details'}</button>
+      {dirty && <button type="button" className="admin-btn" disabled={saving} onClick={() => setForm(data.guest)}>Discard edits</button>}
+    </form>}
+    {data && <><h3>Booking history</h3><div className="admin-table-wrap"><table className="admin-table"><thead><tr><th>Reference</th><th>Room</th><th>Dates</th><th>Status</th><th>Payments</th><th>Refunds</th></tr></thead>
+      <tbody>{data.bookings.map((b) => <tr key={b.id}><td>{b.id}</td><td>{b.roomNumber} · {b.type}</td><td>{b.checkIn} to {b.checkOut}</td><td>{STATUS_LABELS[b.status]}</td><td>{money(b.paidCents)}</td><td>{money(b.refundedCents)}</td></tr>)}
+        {!data.bookings.length && <tr><td colSpan="6">No bookings on this page.</td></tr>}</tbody></table></div>
+      <button className="admin-btn" disabled={saving || dirty || page === 1} onClick={() => setPage((p) => p - 1)}>Previous bookings</button>{' '}<span>Page {page}</span>{' '}
+      <button className="admin-btn" disabled={saving || dirty || !data.hasMore} onClick={() => setPage((p) => p + 1)}>Next bookings</button>
+    </>}
+    <button className="admin-btn" style={{ marginTop: 12 }} disabled={saving || dirty} onClick={onClose}>Close profile</button>
+    {dirty && <p>Save or discard edits before closing or changing pages.</p>}
+  </section>
 }

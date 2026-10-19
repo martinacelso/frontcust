@@ -1,3 +1,4 @@
+import DigitInput from '../DigitInput'
 import { useState, useRef } from 'react'
 import { useAdmin } from '../../context/AdminContext'
 
@@ -138,11 +139,7 @@ export default function AdminProfile({ onClose }) {
                 </div>}
                 <div>
                   <label>Philippine mobile number</label>
-                  <input
-                    value={phone}
-                    onChange={(e) => setPhone(e.target.value)}
-                    placeholder="Optional"
-                  />
+                  <DigitInput value={phone} onValueChange={setPhone} placeholder="0911 222 1233 (optional)" />
                 </div>
               </div>
 

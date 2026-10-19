@@ -4,7 +4,7 @@ const { rateLimit } = require('express-rate-limit');
 const RoomType = require('../models/RoomType');
 const Room = require('../models/Room');
 const Booking = require('../models/Booking');
-const { activeFilter, today } = require('../utils/bookingRules');
+const { activeFilter, today, dateValue } = require('../utils/bookingRules');
 const { transaction, failure } = require('../utils/transaction');
 const { authenticated, requireRoles } = require('../middleware/auth');
 const router = express.Router();
@@ -40,6 +40,27 @@ const writes = rateLimit({ windowMs: 60000, limit: 60, standardHeaders: 'draft-8
 router.get('/', async (req, res) => {
   const [types, rooms] = await Promise.all([RoomType.find().sort({ name: 1 }), Room.find().sort({ number: 1 })]);
   res.json({ types: types.map(typeView), rooms: rooms.map(roomView) });
+});
+
+// A date-based staff view, distinct from the catalog and housekeeping status.
+router.get('/availability', requireRoles('admin', 'front-desk'), async (req, res) => {
+  const { checkIn, checkOut } = req.query;
+  const start = dateValue(checkIn), end = dateValue(checkOut), nights = (end - start) / 86400000;
+  if (!Number.isInteger(nights) || nights < 1 || nights > 90 || checkIn < today() || start > dateValue(today()) + 365 * 86400000) {
+    throw failure(400, 'Choose arrival today or later (within one year) and a stay of 1 to 90 nights.');
+  }
+  const blocked = await Booking.distinct('room', { $or: [
+    { ...activeFilter(), checkIn: { $lt: checkOut }, checkOut: { $gt: checkIn } },
+    { status: 'checked-in' },
+  ] });
+  const ids = new Set(blocked.map(String));
+  const [types, rooms] = await Promise.all([RoomType.find().sort({ name: 1 }), Room.find().sort({ number: 1 })]);
+  const rows = rooms.map((r) => {
+    const reason = r.status === 'occupied' ? 'Occupied' : r.status === 'maintenance' ? 'Maintenance' : ids.has(String(r._id)) ? 'Reserved for these dates' : '';
+    return { ...roomView(r), available: !reason, ready: !reason && r.status === 'available',
+      availability: reason || (r.status === 'dirty' ? 'Available after cleaning' : 'Available') };
+  });
+  res.json({ types: types.map(typeView), rooms: rows, checkIn, checkOut, checkedAt: new Date() });
 });
 
 function typeInput(b) {
@@ -87,13 +108,18 @@ router.post('/', writes, requireRoles('admin'), async (req, res) => {
 router.patch('/:id', writes, requireRoles('admin'), async (req, res) => {
   const input = roomInput(req.body);
   if (!objectId(req.params.id) || !input || !versionOK(req.body.version)) return res.status(400).json({ error: 'Invalid room details or version.' });
-  const original = await Room.findById(req.params.id);
-  if (!original) return res.status(404).json({ error: 'Room not found.' });
-  if (original.status === 'occupied') return res.status(409).json({ error: 'An occupied room cannot be edited here.' });
-  if (String(original.roomType) !== input.roomType) return res.status(409).json({ error: 'Changing a room type is unavailable until reservation checks are connected.' });
-  const room = await Room.findOneAndUpdate({ _id: original._id, __v: req.body.version, status: { $ne: 'occupied' } },
-    { $set: input, $inc: { __v: 1 } }, { new: true, runValidators: true });
-  if (!room) return res.status(409).json({ error: 'This room changed. Refresh and try again.' });
+  const room = await transaction(async (session) => {
+    // This write serializes room edits with online bookings, walk-ins and check-in.
+    const original = await Room.findOneAndUpdate({ _id: req.params.id, __v: req.body.version, status: { $ne: 'occupied' } },
+      { $inc: { __v: 1 } }, { session, returnDocument: 'before' });
+    if (!original) throw failure(409, 'Room unavailable, occupied, or changed. Refresh and try again.');
+    if (!(await RoomType.exists({ _id: input.roomType }).session(session))) throw failure(400, 'Choose an existing room type.');
+    if (String(original.roomType) !== input.roomType || original.number !== input.number) {
+      const reserved = await Booking.exists({ room: original._id, ...activeFilter() }).session(session);
+      if (reserved) throw failure(409, 'This room has an active booking or payment hold. Resolve it before changing its number or type.');
+    }
+    return Room.findOneAndUpdate({ _id: original._id }, { $set: input }, { session, returnDocument: 'after', runValidators: true });
+  });
   res.json({ room: roomView(room) });
 });
 
@@ -117,7 +143,18 @@ router.patch('/:id/status', writes, requireRoles('admin', 'housekeeping'), async
   res.json({ room: roomView(room) });
 });
 
-// No delete route: reservation/history checks must be implemented first.
+// Remove only unused rooms. Booking history keeps its original room reference.
+router.delete('/:id', writes, requireRoles('admin'), async (req, res) => {
+  if (!objectId(req.params.id) || !versionOK(req.body?.version) || req.body?.confirm !== true) throw failure(400, 'Confirm room removal and refresh its version.');
+  await transaction(async (session) => {
+    const room = await Room.findOneAndUpdate({ _id: req.params.id, __v: req.body.version, status: { $ne: 'occupied' } },
+      { $inc: { __v: 1 } }, { session, returnDocument: 'after' });
+    if (!room) throw failure(409, 'Room unavailable, occupied, or changed. Refresh and try again.');
+    if (await Booking.exists({ room: room._id }).session(session)) throw failure(409, 'This room has booking history and cannot be removed. Keep it for reservation records.');
+    await Room.deleteOne({ _id: room._id }, { session });
+  });
+  res.json({ removedId: req.params.id });
+});
 router.use((error, req, res, next) => {
   if (error.status) return res.status(error.status).json({ error: error.message });
   if (error.code === 11000) return res.status(409).json({ error: 'That room number or room type name already exists.' });

@@ -7,7 +7,7 @@ const promos = [
     name: 'TARA Promo',
     image: '/promo-1.jpg',
     description:
-      'Travel Away & Reignite Adventure with Megaworld Hotels & Resorts. Book now and enjoy special rates starting at Php 3,800. Use promo code TARAMHR when booking directly. Valid for stays until November 30, 2026.',
+      'Plan your next getaway. Check room availability for current rates; contact the front desk about special offers.',
   },
   {
     name: 'Kiddie Stay & Play',

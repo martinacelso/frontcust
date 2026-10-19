@@ -8,10 +8,17 @@ export default function TripsTab() {
   useEffect(() => { refreshBookings() }, [refreshBookings])
   const mine = myBookings()
   function details(id) { setModal({ type: 'receipt', booking: mine.find((b) => b.id === id) }) }
-  function cancel(id) { setModal({ type: 'cancel', booking: mine.find((b) => b.id === id), label: 'Cancel reservation', onConfirm: () => cancelBooking(id) }) }
+  function cancel(id) {
+    const booking = mine.find((b) => b.id === id)
+    setModal({ type: 'cancel', booking, label: booking.paid > booking.refunded ? 'Cancel and refund' : 'Cancel reservation', onConfirm: async () => {
+      const result = await cancelBooking(id, booking.paid > booking.refunded)
+      if (result.error) return result
+      setModal({ type: 'receipt', booking: result.booking }); return false
+    } })
+  }
   function pay(id) {
-    setModal({ type: 'simulate', booking: mine.find((b) => b.id === id), label: 'Simulate down payment', onConfirm: async () => {
-      const result = await simulatePayment(id)
+    setModal({ type: 'simulate', booking: mine.find((b) => b.id === id), label: 'Confirm payment', onConfirm: async (method, paymentDetails) => {
+      const result = await simulatePayment(id, method, paymentDetails)
       if (result.error) return result
       setModal({ type: 'confirmed', booking: result.booking }); return false
     } })

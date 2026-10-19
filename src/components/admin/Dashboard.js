@@ -1,95 +1,63 @@
-import { useState } from 'react'
-import { useAdmin, T, sd, P } from '../../context/AdminContext'
-import { netReceipts } from '../../utils/reporting'
-import Timeline from './Timeline'
+import { useEffect, useState } from 'react'
+import { useAdmin } from '../../context/AdminContext'
+import { bookingRequest } from '../../utils/bookingApi'
 import QuickCheckIn from './QuickCheckIn'
 
+const money = (n) => new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP' }).format(n / 100)
 export default function Dashboard() {
-  const { rooms, bookings, free, can } = useAdmin()
-  const [tab, setTab] = useState('timeline')
-
-  const today = T()
-  const totalRooms = rooms.length
-  const availableRooms = rooms.filter((r) => r.status === 'available' && free(r, today, sd(1))).length
-  const occupiedRooms = rooms.filter((r) => r.status === 'occupied').length
-
-  const active = bookings.filter((b) => b.st !== 'cancelled')
-  const arrivalsToday = active.filter((b) => b.in === today).length
-  const departuresToday = active.filter(
-    (b) => b.out === today && b.st !== 'confirmed'
-  ).length
-  const totalBookings = active.length
-  const revenue = netReceipts(bookings)
-
-  const days = []
-  for (let i = -6; i <= 0; i++) {
-    const d = sd(i)
-    const dayTotal = netReceipts(bookings, d, d)
-    days.push({ label: d.slice(5), value: dayTotal })
-  }
-  const max = Math.max(...days.map((d) => Math.abs(d.value)), 1)
-
-  const stats = [
-    [totalRooms, 'Total rooms'],
-    [availableRooms, 'Available rooms'],
-    [occupiedRooms, 'Occupied rooms'],
-    [arrivalsToday, "Scheduled arrivals today"],
-    [departuresToday, "Scheduled departures today"],
-    [totalBookings, 'Total bookings'],
-    ...(can('bill') || can('rep') ? [[P(revenue), 'Net receipts']] : []),
-  ]
-
-  return (
-    <>
+  const { sessionUser } = useAdmin()
+  if (!sessionUser || !['admin', 'front-desk', 'housekeeping'].includes(sessionUser.role)) return <p role="alert">Staff sign-in required.</p>
+  return <Overview key={sessionUser.id} housekeeping={sessionUser.role === 'housekeeping'} />
+}
+function Overview({ housekeeping }) {
+  const [data, setData] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [reload, setReload] = useState(0)
+  const [quick, setQuick] = useState(false)
+  useEffect(() => {
+    let current = true
+    setLoading(true); setError(''); setData(null)
+    bookingRequest('/dashboard').then((result) => {
+      if (!current) return
+      if (result.error) setError(result.error)
+      else setData(result)
+      setLoading(false)
+    })
+    return () => { current = false }
+  }, [reload])
+  const stats = data ? [
+    [data.rooms.total, 'Total rooms'], [data.rooms.clean, 'Clean rooms'],
+    [data.rooms.occupied, 'Occupied rooms'], [data.rooms.dirty, 'Rooms needing cleaning'],
+    [data.rooms.maintenance, 'Under maintenance'],
+    ...(!housekeeping ? [[data.rooms.availableTonight, 'Clean and unreserved tonight'],
+      [data.arrivals, 'Still expected today'], [data.departures, 'Check-outs due today'],
+      [data.overdue, 'Overdue check-outs'], [data.bookings, 'All booking records'],
+      [money(data.simulatedPaymentsCents), 'Net payments · all time']] : []),
+  ] : []
+  const max = Math.max(1, ...(data?.days || []).map((d) => Math.abs(d.cents)))
+  return <>
+    <button className="admin-btn" disabled={loading} onClick={() => setReload((n) => n + 1)}>{loading ? 'Loading…' : 'Refresh dashboard'}</button>
+    {error && <p role="alert" className="acc-error">{error}</p>}
+    {data && <>
+      <p>As of {new Date(data.updatedAt).toLocaleString('en-PH', { timeZone: 'Asia/Manila' })} (Philippine time). Refresh after changes.</p>
       {/* Stats strip */}
-      <div className="admin-stats">
-        {stats.map(([value, label]) => (
-          <div className="admin-stat" key={label}>
-            <b>{value}</b>
-            <span>{label}</span>
-          </div>
-        ))}
-      </div>
-
-      {/* Timeline + quick check-in/out tabs */}
-      {(can('book') || can('chk')) && <div className="admin-tabs" style={{ marginTop: 22 }}>
-        <button
-          className={`admin-btn ${tab === 'timeline' ? '' : 's'}`}
-          onClick={() => setTab('timeline')}
-        >
-          Booking Calendar
-        </button>
-        <button
-          className={`admin-btn ${tab === 'quick' ? '' : 's'}`}
-          onClick={() => setTab('quick')}
-        >
-          Quick Check-in / out
-        </button>
-      </div>}
-
-      {can('book') && tab === 'timeline' && <Timeline />}
-
-      {can('chk') && tab === 'quick' && (
-        <div className="admin-card">
-          <QuickCheckIn />
-        </div>
-      )}
-
+      <div className="admin-stats">{stats.map(([value, label]) => <div className="admin-stat" key={label}><b>{value}</b><span>{label}</span></div>)}</div>
+      {!housekeeping && <p>All booking records includes cancelled and expired holds. Clean rooms may already be reserved.</p>}
       {/* Revenue chart */}
-      {(can('bill') || can('rep')) && <>
-      <h2 className="admin-h2">Net receipts – last 7 days</h2>
-      <div className="admin-card">
-        <div className="admin-bars">
-          {days.map((d) => (
-            <div className="admin-bar" key={d.label}>
-              <i style={{ height: Math.round((Math.abs(d.value) / max) * 90) + 'px', background: d.value < 0 ? '#b23b3b' : undefined }} />
-              <span className="admin-bar-value">{P(d.value)}</span>
-              <span className="admin-bar-label">{d.label}</span>
-            </div>
-          ))}
-        </div>
-      </div>
+      {!housekeeping && <>
+        <h2 className="admin-h2">Net payments — last 7 days</h2>
+        <p>Deposits and balance payments minus refunds, by recording date. Test transactions; no real money collected.</p>
+        <div className="admin-card"><div className="admin-bars">{data.days.map((d) => <div className="admin-bar" key={d.date}>
+          <i aria-hidden="true" style={{ height: Math.round(Math.abs(d.cents) / max * 90) + 'px', background: d.cents < 0 ? '#b23b3b' : undefined }} />
+          <span className="admin-bar-value">{money(d.cents)}</span><span className="admin-bar-label">{d.date}</span>
+        </div>)}</div></div>
       </>}
-    </>
-  )
+    </>}
+    {/* Timeline + quick check-in/out tabs */}
+    {!housekeeping && <div style={{ marginTop: 22 }}>
+      <button className="admin-btn" onClick={() => setQuick((value) => !value)}>{quick ? 'Hide quick check-in / out' : 'Open quick check-in / out'}</button>
+      {quick && <div className="admin-card"><QuickCheckIn /></div>}
+    </div>}
+  </>
 }

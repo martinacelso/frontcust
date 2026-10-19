@@ -22,6 +22,7 @@ const userSchema = new mongoose.Schema(
 
     contactEmail: { type: String, trim: true, lowercase: true, maxlength: 254,
       validate: { validator: (v) => !v || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v), message: 'Enter a valid contact email.' } },
+    department: { type: String, trim: true, maxlength: 80, default: '' },
     sessionVersion: { type: Number, default: 0 },
     passwordHash: {
       type: String,

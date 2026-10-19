@@ -1,3 +1,4 @@
+import StaffModule from './StaffModule'
 import { useState } from 'react'
 import { useAdmin, MODS } from '../../context/AdminContext'
 import Dashboard from './Dashboard'
@@ -34,7 +35,7 @@ export default function AdminLayout() {
       case 'bill': return <BillingModule />
       case 'hk': return <HousekeepingModule />
       case 'rep': return <ReportsModule />
-      case 'staff': return <p className="admin-muted">Staff account management is not available yet. Your current administrator account is stored in MongoDB.</p>
+      case 'staff': return <StaffModule />
       case 'audit': return <AuditModule />
       default: return null
     }

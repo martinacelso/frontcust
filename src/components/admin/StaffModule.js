@@ -1,215 +1,53 @@
-import { profileError, passwordError } from '../../utils/validation'
-import { useState } from 'react'
-import { useAdmin, MODS } from '../../context/AdminContext'
-
+import { useEffect, useRef, useState } from 'react'
+import { useAdmin } from '../../context/AdminContext'
+import { bookingRequest } from '../../utils/bookingApi'
+const roles = { admin: 'Administrator', 'front-desk': 'Front Desk', housekeeping: 'Housekeeping' }
 export default function StaffModule() {
-  const {
-    staff, perms, user, setStaff, setPerms, nextId, logAction,
-  } = useAdmin()
-
-  const { can } = useAdmin()
-
-  const [tab, setTab] = useState('st')
-  const [editModal, setEditModal] = useState(null)
-
-  function openEdit(id) {
-    if (!id) {
-      setEditModal({ id: 0, name: '', email: '', role: 'Front Desk', dept: 'Front Office', pw: 'welcome1' })
-    } else {
-      const s = staff.find((x) => x.id === id)
-      setEditModal({ id: s.id, name: s.name, email: s.email, role: s.role, dept: s.dept, pw: '' })
-    }
+  const { sessionUser } = useAdmin()
+  if (sessionUser?.role !== 'admin') return <p role="alert">Administrator access required.</p>
+  return <Staff key={sessionUser.id} self={sessionUser.id} />
+}
+function Staff({ self }) {
+  const [rows, setRows] = useState([]), [page, setPage] = useState(1), [more, setMore] = useState(false)
+  const [revision, setRevision] = useState(0), [busy, setBusy] = useState(false), [loading, setLoading] = useState(true)
+  const [error, setError] = useState(''), [message, setMessage] = useState(''), [edit, setEdit] = useState(null)
+  const lock = useRef(false), alive = useRef(true)
+  useEffect(() => { alive.current = true; return () => { alive.current = false } }, [])
+  useEffect(() => {
+    let current = true; setLoading(true); setRows([]); setError('')
+    bookingRequest('/staff?page=' + page).then((r) => { if (!current) return; if (r.error) setError(r.error); else { setRows(r.staff); setMore(r.hasMore) } setLoading(false) })
+    return () => { current = false }
+  }, [page, revision])
+  async function save(e) {
+    e.preventDefault(); if (lock.current) return
+    lock.current = true; setBusy(true); setError(''); setMessage('')
+    try {
+      const r = await bookingRequest('/staff/save', edit)
+      if (!alive.current) return
+      if (r.error) { setError(r.error); setEdit((v) => ({ ...v, adminPassword: '', password: '' })) }
+      else { setMessage(r.message); setEdit(null); setRevision((n) => n + 1) }
+    } finally { lock.current = false; if (alive.current) setBusy(false) }
   }
-
-  function saveEdit() {
-    if (!can('staff')) return window.alert('You do not have permission to manage staff.')
-    const error = profileError(editModal, staff, editModal.id) || (!editModal.id ? passwordError(editModal.pw) : '')
-    if (error) return window.alert(error)
-    if (!roles.includes(editModal.role)) return window.alert('Select a valid role.')
-    if (editModal.id === user.id && editModal.role !== user.role) return window.alert('You cannot change your own role.')
-    if (editModal.id && !staff.some((s) => s.id === editModal.id)) return window.alert('This employee no longer exists.')
-    logAction(
-      editModal.id ? 'Edited employee' : 'Added employee',
-      editModal.name,
-      `${editModal.role} · ${editModal.dept}`
-    )
-    if (editModal.id) {
-      setStaff((prev) =>
-        prev.map((s) =>
-          s.id === editModal.id
-            ? { ...s, name: editModal.name.trim(), email: editModal.email.trim(), role: editModal.role, dept: editModal.dept }
-            : s
-        )
-      )
-    } else {
-      setStaff((prev) => [
-        ...prev,
-        {
-          id: nextId(),
-          name: editModal.name.trim(),
-          email: editModal.email.trim(),
-          role: editModal.role,
-          dept: editModal.dept,
-          pw: editModal.pw || 'welcome1',
-          on: true,
-        },
-      ])
-    }
-    setEditModal(null)
-  }
-
-  function toggleStaff(id) {
-    if (!can('staff')) return window.alert('You do not have permission to manage staff.')
-    if (id === user.id) return window.alert("You can't disable your own account.")
-    const s = staff.find((x) => x.id === id)
-    if (!s) return window.alert('This employee no longer exists.')
-    if (!window.confirm(`${s.on ? 'Disable' : 'Enable'} ${s.name}'s account?`)) return
-    logAction(s.on ? 'Disabled employee' : 'Enabled employee', s.name, s.role)
-    setStaff((prev) => prev.map((x) => (x.id === id ? { ...x, on: !x.on } : x)))
-  }
-
-  function resetPassword(id) {
-    if (!can('staff')) return window.alert('You do not have permission to manage staff.')
-    const s = staff.find((x) => x.id === id)
-    if (!s) return window.alert('This employee no longer exists.')
-    if (!window.confirm(`Reset ${s.name}'s password to the default welcome1?`)) return
-    logAction('Reset password', s.name, 'Password reset')
-    setStaff((prev) => prev.map((x) => (x.id === id ? { ...x, pw: 'welcome1' } : x)))
-    window.alert('Password reset to: welcome1')
-  }
-
-  function deleteStaff(id) {
-    if (!can('staff')) return window.alert('You do not have permission to manage staff.')
-    if (id === user.id) return window.alert("You can't delete your own account.")
-    if (!staff.some((s) => s.id === id)) return window.alert('This employee no longer exists.')
-    if (window.confirm('Delete this employee?')) {
-      const s = staff.find((x) => x.id === id)
-      logAction('Deleted employee', s.name, s.role)
-      setStaff((prev) => prev.filter((s) => s.id !== id))
-    }
-  }
-
-  function togglePermission(role, moduleId, enabled) {
-    if (!can('staff')) return window.alert('You do not have permission to manage staff.')
-    if (!Object.hasOwn(perms, role) || !MODS.some(([id]) => id === moduleId)) return window.alert('Choose a valid role and module.')
-    if (role === 'Admin' || moduleId === 'dash') return window.alert('Administrator access and dashboard access are required.')
-    if (!window.confirm(`${enabled ? 'Grant' : 'Remove'} ${moduleId} access for ${role}?`)) return
-    logAction('Edited permissions', role, `${enabled ? 'Enabled' : 'Disabled'} ${moduleId}`)
-    setPerms((prev) => {
-      const list = [...(prev[role] || [])]
-      const idx = list.indexOf(moduleId)
-      if (enabled && idx < 0) list.push(moduleId)
-      if (!enabled && idx > -1) list.splice(idx, 1)
-      return { ...prev, [role]: list }
-    })
-  }
-
-  const roles = Object.keys(perms)
-
-  return (
-    <>
-      <div className="admin-tabs">
-        <button className={`admin-btn ${tab === 'st' ? '' : 's'}`} onClick={() => setTab('st')}>Employees</button>
-        <button className={`admin-btn ${tab === 'ro' ? '' : 's'}`} onClick={() => setTab('ro')}>Roles &amp; permissions</button>
-      </div>
-
-      {tab === 'st' && (
-        <>
-          <div className="admin-table-wrap">
-            <table className="admin-table">
-              <thead>
-                <tr><th>Name</th><th>Email</th><th>Role</th><th>Department</th><th>Account</th><th /></tr>
-              </thead>
-              <tbody>
-                {staff.map((s) => (
-                  <tr key={s.id}>
-                    <td>{s.name}</td>
-                    <td>{s.email}</td>
-                    <td>{s.role}</td>
-                    <td>{s.dept}</td>
-                    <td>
-                      <span className={`admin-badge ${s.on ? 'available' : 'cancelled'}`}>
-                        {s.on ? 'active' : 'disabled'}
-                      </span>
-                    </td>
-                    <td>
-                      <button className="admin-link" onClick={() => openEdit(s.id)}>Edit</button>
-                      <button className="admin-link" onClick={() => toggleStaff(s.id)}>{s.on ? 'Disable' : 'Enable'}</button>
-                      <button className="admin-link" onClick={() => resetPassword(s.id)}>Reset pw</button>
-                      <button className="admin-link danger" onClick={() => deleteStaff(s.id)}>Delete</button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <button className="admin-btn" onClick={() => openEdit(0)}>+ Add employee</button>
-        </>
-      )}
-
-      {tab === 'ro' && (
-        <div className="admin-table-wrap">
-          <table className="admin-table">
-            <thead>
-              <tr><th>Module</th>{roles.map((r) => (<th key={r}>{r}</th>))}</tr>
-            </thead>
-            <tbody>
-              {MODS.map(([id, label]) => (
-                <tr key={id}>
-                  <td>{label}</td>
-                  {roles.map((r) => {
-                    const isAdmin = r === 'Admin'
-                    const isDash = id === 'dash'
-                    const checked = isAdmin || isDash ? true : (perms[r] || []).indexOf(id) > -1
-                    return (
-                      <td key={r} style={{ textAlign: 'center' }}>
-                        <input
-                          type="checkbox"
-                          checked={checked}
-                          disabled={isAdmin || isDash}
-                          onChange={(e) => togglePermission(r, id, e.target.checked)}
-                        />
-                      </td>
-                    )
-                  })}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-
-      {editModal && (
-        <div className="acc-modal-overlay" onClick={() => setEditModal(null)}>
-          <div className="acc-modal" onClick={(e) => e.stopPropagation()}>
-            <h3>{editModal.id ? 'Edit employee' : 'Add employee'}</h3>
-            <label>Full name</label>
-            <input value={editModal.name} onChange={(e) => setEditModal({ ...editModal, name: e.target.value })} />
-            <label>Email (login)</label>
-            <input type="email" value={editModal.email} onChange={(e) => setEditModal({ ...editModal, email: e.target.value })} />
-            <label>Role</label>
-            <select value={editModal.role} onChange={(e) => setEditModal({ ...editModal, role: e.target.value })}>
-              {roles.map((r) => (<option key={r} value={r}>{r}</option>))}
-            </select>
-            <label>Department</label>
-            <select value={editModal.dept} onChange={(e) => setEditModal({ ...editModal, dept: e.target.value })}>
-              {['Management', 'Operations', 'Front Office', 'Housekeeping', 'Food & Beverage', 'Maintenance'].map((d) => (
-                <option key={d} value={d}>{d}</option>
-              ))}
-            </select>
-            {!editModal.id && (
-              <>
-                <label>Initial password</label>
-                <input value={editModal.pw} onChange={(e) => setEditModal({ ...editModal, pw: e.target.value })} />
-              </>
-            )}
-            <div className="acc-modal-actions">
-              <button className="btn ghost-dark" onClick={() => setEditModal(null)}>Cancel</button>
-              <button className="btn" onClick={saveEdit}>Save</button>
-            </div>
-          </div>
-        </div>
-      )}
-    </>
-  )
+  return <>
+    <p>Create staff accounts, change roles, reset passwords, or disable access. Disabled accounts remain in historical records.</p>
+    {error && <p role="alert" className="acc-error">{error}</p>}{message && <p role="status">{message}</p>}
+    <button className="admin-btn" disabled={!!edit || loading} onClick={() => setEdit({ name: '', email: '', department: '', role: 'front-desk', active: true, password: '', adminPassword: '' })}>Add employee</button>{' '}
+    <button className="admin-btn" disabled={!!edit || loading} onClick={() => setRevision((n) => n + 1)}>Refresh</button>
+    <div className="admin-table-wrap"><table className="admin-table"><thead><tr><th>Name</th><th>Login email</th><th>Role</th><th>Department</th><th>Account</th><th>Action</th></tr></thead>
+      <tbody>{rows.map((r) => <tr key={r.id}><td>{r.name}</td><td>{r.email}</td><td>{roles[r.role]}</td><td>{r.department || 'Unavailable'}</td><td>{r.active ? 'Active' : 'Disabled'}</td><td>{r.id === self ? 'Use My account' : <button className="admin-link" disabled={!!edit} onClick={() => { setError(''); setMessage(''); setEdit({ ...r, password: '', adminPassword: '' }) }}>Edit / reset password</button>}</td></tr>)}
+        {!rows.length && <tr><td colSpan="6">{loading ? 'Loading…' : 'No staff records on this page.'}</td></tr>}</tbody></table></div>
+    <button className="admin-btn" disabled={loading || !!edit || page === 1} onClick={() => setPage((n) => n - 1)}>Previous</button> Page {page} <button className="admin-btn" disabled={loading || !!edit || !more} onClick={() => setPage((n) => n + 1)}>Next</button>
+    {edit && <form onSubmit={save} className="admin-card" style={{ padding: 20, marginTop: 16 }}><h3>{edit.id ? 'Edit employee' : 'Create employee'}</h3>
+      <fieldset disabled={busy} style={{ display: 'grid', gap: 12, border: 0 }}>
+        {['name', 'email', 'department'].map((key) => <label key={key}>{({ name: 'Full name', email: 'Login email', department: 'Department (optional)' })[key]}<input style={{ display: 'block' }} required={key !== 'department'} type={key === 'email' ? 'email' : 'text'} maxLength={key === 'email' ? 254 : key === 'name' ? 100 : 80} value={edit[key]} onChange={(e) => setEdit({ ...edit, [key]: e.target.value })} /></label>)}
+        <label>Role <select value={edit.role} onChange={(e) => setEdit({ ...edit, role: e.target.value })}>{Object.entries(roles).map(([v, name]) => <option key={v} value={v}>{name}</option>)}</select></label>
+        <label><input type="checkbox" checked={edit.active} onChange={(e) => setEdit({ ...edit, active: e.target.checked })} /> Account active</label>
+        <label>{edit.id ? 'New password (leave blank to keep current)' : 'Initial password'}<input type="password" autoComplete="new-password" required={!edit.id} minLength={8} maxLength={72} value={edit.password} onChange={(e) => setEdit({ ...edit, password: e.target.value })} /></label>
+        <label>Your administrator password<input type="password" autoComplete="current-password" required value={edit.adminPassword} onChange={(e) => setEdit({ ...edit, adminPassword: e.target.value })} /></label>
+        <p>Saving changes signs this employee out of existing sessions. Review role and active status before saving.</p>
+        <button className="admin-btn">{busy ? 'Saving…' : 'Confirm and save'}</button><button type="button" className="admin-btn" onClick={() => setEdit(null)}>Cancel</button>
+      </fieldset></form>}
+    <h3>Role access</h3><ul><li>Administrator: all modules and staff management.</li><li>Front Desk: dashboard, read-only room availability, reservations, guests, check-in/out and billing.</li><li>Housekeeping: dashboard and housekeeping.</li></ul>
+    <p>These roles are enforced by the server. Use role assignment to change employee access.</p>
+  </>
 }

@@ -44,7 +44,10 @@ export default function useRoomInventory() {
     const result = await roomRequest(endpoint, method, body)
     if (!alive.current || ticket !== generation.current) return { error: 'This screen has closed.' }
     if (result.error) setError(result.error)
-    else if (!result.room && !result.type) {
+    else if (result.removedId) {
+      setData((previous) => ({ ...previous, rooms: previous.rooms.filter((r) => r.id !== result.removedId) }))
+      setMessage(success)
+    } else if (!result.room && !result.type) {
       result.error = 'The save returned an unexpected response. Refresh before trying again.'
       setError(result.error)
     } else {

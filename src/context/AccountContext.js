@@ -13,7 +13,7 @@ export const nights = (a, b) => Math.max(1, Math.round((new Date(b) - new Date(a
 export const P = (n) => '₱' + Number(n).toLocaleString()
 export const DOWN_PAYMENT_RATE = 0.2
 export const downPayment = (n) => roundMoney(n * DOWN_PAYMENT_RATE)
-export const PAYMENT_METHODS = ['Demonstration payment']
+export const PAYMENT_METHODS = ['GCash', 'Maya', 'Card', 'Bank Transfer']
 export const TYPES = ROOM_TYPES
 
 export function AccountProvider({ children }) {
@@ -95,10 +95,10 @@ function AccountState({ children, auth }) {
     myBookings: () => bookings, bookingLoading: loading, bookingError: error, bookingBusy: busy,
     demoEnabled, refreshBookings,
     addBooking: (data) => mutation('/bookings', data),
-    simulatePayment: (id) => mutation('/bookings/' + id + '/simulate-payment', {}),
-    cancelBooking: (id) => {
+    simulatePayment: (id, method, paymentDetails) => mutation('/bookings/' + id + '/simulate-payment', { method, paymentDetails }),
+    cancelBooking: (id, confirmRefund = false) => {
       const row = rows.find((b) => b.id === id)
-      return row ? mutation('/bookings/' + id + '/cancel', { version: row.version }) : Promise.resolve({ error: 'Booking not found. Refresh and try again.' })
+      return row ? mutation('/bookings/' + id + '/cancel', { version: row.version, confirmRefund }) : Promise.resolve({ error: 'Booking not found. Refresh and try again.' })
     }, sd, T, nights, P,
   }
   return <AccountContext.Provider value={value}>{children}</AccountContext.Provider>

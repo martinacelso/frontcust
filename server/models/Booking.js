@@ -1,7 +1,10 @@
 const mongoose = require('mongoose');
 const integerMoney = { type: Number, required: true, min: 0, validate: Number.isSafeInteger };
 const schema = new mongoose.Schema({
-  guest: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
+  guest: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: function () { return this.source !== 'walk-in'; }, index: true },
+  source: { type: String, enum: ['online', 'walk-in'], default: 'online' },
+  walkInGuest: { name: { type: String, maxlength: 100 }, email: { type: String, maxlength: 254 }, phone: { type: String, maxlength: 11 } },
+  createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   room: { type: mongoose.Schema.Types.ObjectId, ref: 'Room', required: true, index: true },
   roomType: { type: mongoose.Schema.Types.ObjectId, ref: 'RoomType', required: true },
   typeName: { type: String, required: true },
@@ -21,17 +24,27 @@ const schema = new mongoose.Schema({
   requestId: { type: String, required: true },
   fingerprint: { type: String, required: true },
   cancelledAt: Date,
+  refundedCents: { type: Number, default: 0, min: 0, validate: Number.isSafeInteger },
+  simulatedRefund: {
+    reference: String, method: String, originalReference: String,
+    amountCents: { type: Number, min: 0, validate: Number.isSafeInteger },
+    recordedAt: Date,
+  },
   checkedInAt: Date,
   checkedOutAt: Date,
   checkedInBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   checkedOutBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   simulatedSettlement: {
     reference: String,
+    detailsLabel: { type: String, maxlength: 100 },
+    method: { type: String, enum: ['GCash', 'Maya', 'Card', 'Bank Transfer'] },
     amountCents: { type: Number, min: 0, validate: Number.isSafeInteger },
     recordedAt: Date,
   },
   simulatedPayment: {
     reference: String,
+    detailsLabel: { type: String, maxlength: 100 },
+    method: { type: String, enum: ['GCash', 'Maya', 'Card', 'Bank Transfer'] },
     amountCents: { type: Number, min: 0, validate: Number.isSafeInteger },
     recordedAt: Date,
   },
