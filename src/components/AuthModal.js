@@ -1,22 +1,33 @@
 import { emailError, textError } from '../utils/validation'
 import { useState, useEffect } from 'react'
 import { useAuth } from '../hooks/useAuth'
+import { authRequest } from '../utils/api'
 
-export default function AuthModal({ isOpen, onClose }) {
-  return isOpen ? <AuthDialog onClose={onClose} /> : null
+function clearResetTokenFromUrl() {
+  const url = new URL(window.location.href)
+  url.searchParams.delete('resetToken')
+  url.hash = ''
+  window.history.replaceState(null, '', url.pathname + url.search)
 }
 
-function AuthDialog({ onClose }) {
+export default function AuthModal({ isOpen, onClose, resetToken }) {
+  return isOpen ? <AuthDialog key={resetToken || 'auth'} onClose={onClose} resetToken={resetToken} /> : null
+}
+
+function AuthDialog({ onClose, resetToken }) {
   const { handleSignIn, handleSignUp } = useAuth()
 
-  const [mode, setMode] = useState('signin') // 'signin' | 'signup' | 'reset'
+  const [mode, setMode] = useState(resetToken ? 'set-password' : 'signin')
   const [firstName, setFirstName] = useState('')
   const [lastName, setLastName] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
   const [showPass, setShowPass] = useState(false)
   const [message, setMessage] = useState('')
   const [notification, setNotification] = useState('')
+  const [notificationTitle, setNotificationTitle] = useState('')
+  const [busy, setBusy] = useState(false)
 
   useEffect(() => {
     if (!notification) return
@@ -26,11 +37,11 @@ function AuthDialog({ onClose }) {
 
   useEffect(() => {
     function onKey(e) {
-      if (e.key === 'Escape') onClose()
+      if (e.key === 'Escape' && !resetToken) onClose()
     }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
-  }, [onClose])
+  }, [onClose, resetToken])
 
   useEffect(() => {
     document.body.style.overflow = 'hidden'
@@ -42,6 +53,7 @@ function AuthDialog({ onClose }) {
     setLastName('')
     setEmail('')
     setPassword('')
+    setConfirmPassword('')
     setMessage('')
     setShowPass(false)
   }
@@ -51,56 +63,99 @@ function AuthDialog({ onClose }) {
     setMode(next)
   }
 
-  function handleSubmit(e) {
+  async function handleSubmit(e) {
     e.preventDefault()
-    const error = emailError(email)
-    if (error) return setMessage(error)
-
-    if (mode === 'reset') {
-      if (!email) return setMessage('Please enter your email.')
-      return setMessage('Password reset by email is not available yet. No reset link has been sent.')
+    if (busy) return
+    if (mode === 'reset-request' || mode === 'signin' || mode === 'signup') {
+      const error = emailError(email)
+      if (error) return setMessage(error)
     }
 
-    if (!email || !password) return setMessage('Please fill in all fields.')
+    if (mode === 'set-password') {
+      if (password.length < 8) return setMessage('Use a password with at least 8 characters.')
+      if (password !== confirmPassword) return setMessage('The passwords do not match.')
+    } else if (!email || (mode !== 'reset-request' && !password)) {
+      return setMessage('Please fill in all fields.')
+    }
 
-    if (mode === 'signin') {
-      const result = handleSignIn(email.trim().toLowerCase(), password)
-      if (result.error) return setMessage(result.error)
+    setBusy(true)
+    setMessage('')
+    try {
+      if (mode === 'reset-request') {
+        const result = await authRequest('/password-reset/request', { email: email.trim().toLowerCase() })
+        if (result.error || !result.ok) return setMessage(result.error || 'Unable to request a password reset.')
+        setPassword('')
+        setMode('signin')
+        setNotificationTitle('Password reset request')
+        setNotification(result.message)
+        if (resetToken) {
+          clearResetTokenFromUrl()
+          window.setTimeout(() => window.location.reload(), 1200)
+        }
+        return
+      }
+
+      if (mode === 'set-password') {
+        const result = await authRequest('/password-reset/complete', { token: resetToken, password })
+        if (result.error || !result.ok) return setMessage(result.error || 'Unable to reset your password.')
+        setMessage(result.message)
+        clearResetTokenFromUrl()
+        window.setTimeout(() => window.location.reload(), 1200)
+        return
+      }
+
+      if (mode === 'signin') {
+        const result = await handleSignIn(email.trim().toLowerCase(), password)
+        if (result.error || !result.ok) {
+          return setMessage(result.error || 'Sign in could not be confirmed. Please try again.')
+        }
+        reset()
+        onClose()
+        return
+      }
+
+      // signup — guests only
+      if (textError(firstName, 'First name') || textError(lastName, 'Last name')) {
+        return setMessage('Please enter your first and last name.')
+      }
+      const result = await handleSignUp({
+        name: `${firstName.trim()} ${lastName.trim()}`,
+        email: email.trim().toLowerCase(),
+        password,
+        phone: '',
+      })
+      if (result.error || !result.ok) {
+        return setMessage(result.error || 'Account creation could not be confirmed. Please try again.')
+      }
+      const registeredEmail = email.trim().toLowerCase()
       reset()
-      onClose()
-      return
+      setMode('signin')
+      setEmail(registeredEmail)
+      setNotificationTitle('Account created successfully!')
+      setNotification('Your account is ready. Please sign in with your email and password.')
+    } finally {
+      setBusy(false)
     }
-
-    // signup — guests only
-    if (textError(firstName, 'First name') || textError(lastName, 'Last name')) {
-      return setMessage('Please enter your first and last name.')
-    }
-    const result = handleSignUp({
-      name: `${firstName.trim()} ${lastName.trim()}`,
-      email: email.trim().toLowerCase(),
-      password,
-      phone: '',
-    })
-    if (result.error) return setMessage(result.error)
-    const registeredEmail = email.trim().toLowerCase()
-    reset()
-    setMode('signin')
-    setEmail(registeredEmail)
-    setNotification('Your account is ready. Please sign in with your email and password.')
   }
 
   const heading =
-    mode === 'signin' ? 'SIGN IN' : mode === 'signup' ? 'CREATE ACCOUNT' : 'RESET PASSWORD'
+    mode === 'signin' ? 'SIGN IN'
+      : mode === 'signup' ? 'CREATE ACCOUNT'
+        : mode === 'set-password' ? 'CHOOSE A NEW PASSWORD' : 'RESET PASSWORD'
 
   const subheading =
     mode === 'signin'
       ? 'Welcome back. Enter your details to continue.'
       : mode === 'signup'
       ? 'Join Twin Lakes Hotel for exclusive rates and offers.'
-      : "We'll email you a link to reset your password."
+      : mode === 'set-password'
+        ? 'Choose a new password for your account.'
+        : "We'll email you a link to reset your password."
 
   const buttonLabel =
-    mode === 'signin' ? 'SIGN IN' : mode === 'signup' ? 'CREATE ACCOUNT' : 'SEND RESET LINK'
+    mode === 'signin' ? 'SIGN IN'
+      : mode === 'signup' ? 'CREATE ACCOUNT'
+        : mode === 'set-password' ? 'UPDATE PASSWORD' : 'SEND RESET LINK'
 
   return (
     <div className="auth-overlay">
@@ -120,7 +175,7 @@ function AuthDialog({ onClose }) {
         >
           <span aria-hidden="true" style={{ color: '#287b50', fontSize: 22 }}>✓</span>
           <div style={{ flex: 1 }}>
-            <strong style={{ display: 'block', marginBottom: 3 }}>Account created successfully!</strong>
+            <strong style={{ display: 'block', marginBottom: 3 }}>{notificationTitle}</strong>
             <span>{notification}</span>
           </div>
           <button
@@ -142,7 +197,7 @@ function AuthDialog({ onClose }) {
       </div>
 
       <div className="auth-right">
-        <button className="auth-close" onClick={onClose} aria-label="Close">×</button>
+        {!resetToken && <button className="auth-close" onClick={onClose} aria-label="Close">×</button>}
 
         <div className="auth-form-wrap">
           <h2 className="auth-heading">{heading}</h2>
@@ -174,7 +229,7 @@ function AuthDialog({ onClose }) {
               </div>
             )}
 
-            <div className="auth-field">
+            {mode !== 'set-password' && <div className="auth-field">
               <label htmlFor="auth-email">Email address</label>
               <input
                 id="auth-email"
@@ -183,11 +238,11 @@ function AuthDialog({ onClose }) {
                 onChange={(e) => setEmail(e.target.value)}
                 autoComplete="email"
               />
-            </div>
+            </div>}
 
-            {mode !== 'reset' && (
+            {mode !== 'reset-request' && (
               <div className="auth-field">
-                <label htmlFor="auth-password">Password</label>
+                <label htmlFor="auth-password">{mode === 'set-password' ? 'New password' : 'Password'}</label>
                 <div className="auth-pass-wrap">
                   <input
                     id="auth-password"
@@ -207,19 +262,32 @@ function AuthDialog({ onClose }) {
               </div>
             )}
 
+            {mode === 'set-password' && (
+              <div className="auth-field">
+                <label htmlFor="auth-confirm-password">Confirm new password</label>
+                <input
+                  id="auth-confirm-password"
+                  type={showPass ? 'text' : 'password'}
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  autoComplete="new-password"
+                />
+              </div>
+            )}
+
             {mode === 'signin' && (
               <div className="auth-forgot-row">
                 <button
                   type="button"
                   className="auth-link"
-                  onClick={() => switchMode('reset')}
+                  onClick={() => switchMode('reset-request')}
                 >
                   Forgot password?
                 </button>
               </div>
             )}
 
-            <button type="submit" className="auth-submit">{buttonLabel}</button>
+            <button type="submit" className="auth-submit" disabled={busy}>{busy ? 'PLEASE WAIT…' : buttonLabel}</button>
 
             {message && <p className="auth-msg" role="alert">{message}</p>}
           </form>
@@ -241,11 +309,19 @@ function AuthDialog({ onClose }) {
                 </button>
               </>
             )}
-            {mode === 'reset' && (
+            {mode === 'reset-request' && (
               <>
                 Remembered it?{' '}
                 <button type="button" className="auth-link" onClick={() => switchMode('signin')}>
                   Back to sign in
+                </button>
+              </>
+            )}
+            {mode === 'set-password' && (
+              <>
+                Need a new link?{' '}
+                <button type="button" className="auth-link" onClick={() => switchMode('reset-request')}>
+                  Request another reset link
                 </button>
               </>
             )}

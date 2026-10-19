@@ -2,7 +2,6 @@ import DigitInput from '../DigitInput'
 import { useEffect, useRef, useState } from 'react'
 import { bookingRequest } from '../../utils/bookingApi'
 import PaymentMethod from '../account/PaymentMethod'
-import { paymentDetailsError, paymentDetailsPayload } from '../../utils/paymentDetails'
 const money = (n) => new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP' }).format(n / 100)
 export default function WalkIn({ onComplete }) {
   const [open, setOpen] = useState(false)
@@ -14,7 +13,7 @@ function Form({ onClose, onComplete }) {
   const [stay, setStay] = useState({ roomTypeId: '', checkOut: '', adults: 1, children: 0, requests: '' })
   const [guest, setGuest] = useState({ name: '', phone: '', email: '' })
   const [quote, setQuote] = useState(null), [roomId, setRoomId] = useState('')
-  const [method, setMethod] = useState('GCash'), [details, setDetails] = useState({}), [confirmed, setConfirmed] = useState(false)
+  const [method, setMethod] = useState('GCash'), [confirmed, setConfirmed] = useState(false)
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [done, setDone] = useState(null)
   const [pending, setPending] = useState(null)
   const lock = useRef(false), alive = useRef(true)
@@ -43,11 +42,9 @@ function Form({ onClose, onComplete }) {
     let payload = pending
     if (!payload) {
       if (!quote || !roomId || !confirmed) return
-      const problem = paymentDetailsError(method, details)
-      if (problem) { setError(problem); return }
       if (guest.name.trim().length < 2 || !/^09\d{9}$/.test(guest.phone) || (guest.email.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(guest.email.trim()))) { setError('Enter guest name, 11-digit 09 mobile number, and a valid email if supplied.'); return }
       payload = { ...stay, guest, roomId, checkIn: quote.checkIn, expectedTotalCents: quote.totalCents,
-        requestId: crypto.randomUUID(), method, paymentDetails: paymentDetailsPayload(method, details), confirmPayment: true }
+        requestId: crypto.randomUUID(), method, confirmPayment: true }
       setPending(payload)
     }
     lock.current = true; setBusy(true); setError('')
@@ -58,16 +55,16 @@ function Form({ onClose, onComplete }) {
         setError(r.error)
         // Unknown results retain the exact request for a safe retry.
         if (r.status && r.status < 500) setPending(null)
-      } else { setDone(r); setPending(null); setDetails({}); onComplete() }
+      } else { setDone(r); setPending(null); onComplete() }
     } finally { lock.current = false; if (alive.current) setBusy(false) }
   }
   if (done) return <div className="admin-card" role="status"><h3>Walk-in saved — {done.status}</h3>
     <p>Room {done.roomNumber}. Booking: {done.id}</p><p>Deposit: {money(done.paidCents)}. Balance: {money(done.totalCents - done.paidCents)}</p>
     <p>Payment reference: {done.reference}</p><button className="admin-btn" onClick={onClose}>Done</button></div>
   return <div className="admin-card" style={{ padding: 20, margin: '16px 0' }}>
-    <h3>Walk-in guest</h3><p>Arrival is today, Philippine time. A 20% deposit is collected before check-in.</p>
+    <h3>Walk-in guest</h3>    <p>Arrival is today, Philippine time. A 20% demo deposit is recorded before check-in. No money is charged.</p>
     {error && <p role="alert" className="acc-error">{error}</p>}
-    {!enabled && <p>Payments must be enabled before completing a walk-in.</p>}
+    {!enabled && <p>Enable demo payments with DEMO_PAYMENTS=true in server/.env, then restart the backend before completing a walk-in.</p>}
     <fieldset disabled={busy || !!pending} style={{ border: 0 }}>
       <div style={{ display: 'grid', gap: 10 }}>
         {['name', 'phone', 'email'].map((key) => <label key={key}>{({ name: 'Guest full name', phone: 'Mobile number (0911 222 1233)', email: 'Contact email (optional)' })[key]}
@@ -83,8 +80,8 @@ function Form({ onClose, onComplete }) {
       </form>
       {quote && <><p>Arrival: {quote.checkIn}. Total: {money(quote.totalCents)}. Deposit: {money(quote.depositCents)}.</p>
         {quote.rooms.length ? <label>Room <select value={roomId} onChange={(e) => { setRoomId(e.target.value); setConfirmed(false) }}>{quote.rooms.map((r) => <option key={r.id} value={r.id}>{r.number}</option>)}</select></label> : <p>No clean room is available for the entire stay.</p>}
-        <PaymentMethod value={method} details={details} onChange={(m) => { setMethod(m); setDetails({}); setConfirmed(false) }} onDetailsChange={(d) => { setDetails(d); setConfirmed(false) }} />
-        <label><input type="checkbox" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} /> Confirm guest details, room and {money(quote.depositCents)} deposit through {method}.</label>
+        {enabled && <PaymentMethod name="walk-in-demo-payment-method" value={method} onChange={(m) => { setMethod(m); setConfirmed(false) }} />}
+        <label><input type="checkbox" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} /> Confirm guest details, room and {money(quote.depositCents)} demo payment through {method}.</label>
       </>}
     </fieldset>
     {pending && <p>The result is uncertain. Retry the same request to check its result without creating another booking.</p>}

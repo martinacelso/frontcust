@@ -7,7 +7,7 @@ const Room = require('../models/Room');
 const RoomType = require('../models/RoomType');
 const { today, stayInput, activeFilter, quote } = require('../utils/bookingRules');
 const { transaction, failure } = require('../utils/transaction');
-const paymentDetailsLabel = require('../utils/paymentDetails');
+const demoPaymentLabel = require('../utils/demoPayment');
 const router = express.Router();
 // Mounted behind the booking router's staff authorization, JSON and CSRF checks.
 const inputFor = (b) => stayInput({ ...b, checkIn: today(), adults: Number(b.adults), children: Number(b.children) });
@@ -18,10 +18,10 @@ const blockedFilter = (input) => ({ $or: [
 router.get('/rooms', async (req, res) => {
   const input = inputFor(req.query);
   if (!input) throw failure(400, 'Choose departure date, room type and guest counts.');
-  const type = await RoomType.findById(input.roomTypeId);
+  const type = await RoomType.findOne({ _id: input.roomTypeId, archivedAt: null });
   if (!type || input.adults + input.children > type.capacity) throw failure(400, 'Room capacity is too small.');
   const blocked = await Booking.distinct('room', blockedFilter(input));
-  const rooms = await Room.find({ roomType: type._id, status: 'available', _id: { $nin: blocked } }).sort({ number: 1 });
+  const rooms = await Room.find({ roomType: type._id, status: 'available', archivedAt: null, _id: { $nin: blocked } }).sort({ number: 1 });
   res.json({ checkIn: input.checkIn, ...quote(type, input.nights), rooms: rooms.map((r) => ({ id: String(r._id), number: r.number })) });
 });
 router.post('/', rateLimit({ windowMs: 60000, limit: 20, message: { error: 'Wait a minute before trying again.' } }), async (req, res) => {
@@ -33,7 +33,7 @@ router.post('/', rateLimit({ windowMs: 60000, limit: 20, message: { error: 'Wait
     typeof g.name !== 'string' || g.name.trim().length < 2 || g.name.trim().length > 100 ||
     typeof g.phone !== 'string' || !/^09\d{9}$/.test(g.phone) || typeof g.email !== 'string' ||
     g.email.length > 254 || (g.email.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(g.email.trim()))) throw failure(400, 'Review guest details, dates and payment confirmation.');
-  const detailsLabel = paymentDetailsLabel(b.method, b.paymentDetails);
+  const detailsLabel = demoPaymentLabel(b.method);
   const guest = { name: g.name.trim(), phone: g.phone, email: g.email.trim().toLowerCase() };
   const digest = createHash('sha256').update(JSON.stringify({ input, guest, room: b.roomId, total: b.expectedTotalCents, method: b.method, detailsLabel })).digest('hex');
   const identity = { source: 'walk-in', requestId: b.requestId, createdBy: req.account._id };
@@ -43,13 +43,13 @@ router.post('/', rateLimit({ windowMs: 60000, limit: 20, message: { error: 'Wait
     booking = await transaction(async (session) => {
       const old = await Booking.findOne(identity).session(session);
       if (old) return replay(old);
-      const type = await RoomType.findById(input.roomTypeId).session(session);
+      const type = await RoomType.findOne({ _id: input.roomTypeId, archivedAt: null }).session(session);
       if (!type || input.adults + input.children > type.capacity) throw failure(400, 'Room capacity is too small.');
       const price = quote(type, input.nights);
       if (price.totalCents !== b.expectedTotalCents) throw failure(409, 'Price changed. Search rooms again.');
       const blocked = await Booking.distinct('room', blockedFilter(input)).session(session);
       // The same room write also serializes online bookings and housekeeping changes.
-      const room = await Room.findOneAndUpdate({ _id: { $eq: b.roomId, $nin: blocked }, roomType: type._id, status: 'available' },
+      const room = await Room.findOneAndUpdate({ _id: { $eq: b.roomId, $nin: blocked }, roomType: type._id, status: 'available', archivedAt: null },
         { $set: { status: 'occupied' }, $inc: { __v: 1 } }, { session, returnDocument: 'after' });
       if (!room) throw failure(409, 'Room is no longer clean and available for this stay. Search again.');
       const now = new Date();

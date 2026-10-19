@@ -9,10 +9,10 @@ async function createAdmin() {
   const email = (process.env.ADMIN_EMAIL || '').trim().toLowerCase();
   const password = process.env.ADMIN_PASSWORD || '';
   if (!process.env.MONGODB_URI) throw new Error('Set MONGODB_URI in server/.env.');
-  if (name.length < 2 || name.length > 100) throw new Error('Set ADMIN_NAME to a name between 2 and 100 characters.');
+  if (name.length < 2 || name.length > 100) throw new Error('ADMIN_NAME is missing or invalid. Set it in server/.env to your name (2 to 100 characters), without the variable name in quotes.');
   if (email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('Set ADMIN_EMAIL to a valid email address.');
-  if (password.length < 12 || Buffer.byteLength(password, 'utf8') > 72) {
-    throw new Error('ADMIN_PASSWORD must contain at least 12 characters and at most 72 UTF-8 bytes.');
+  if (password.length < 8 || Buffer.byteLength(password, 'utf8') > 72) {
+    throw new Error('ADMIN_PASSWORD must contain at least 8 characters and at most 72 UTF-8 bytes.');
   }
   await mongoose.connect(process.env.MONGODB_URI, { serverSelectionTimeoutMS: 5000 });
   await User.init();
@@ -28,7 +28,7 @@ async function createAdmin() {
 createAdmin().catch((error) => {
   if (error.code === 11000) console.error('This email already exists. No account was changed.');
   else if (error.name === 'Error') console.error(error.message);
-  else console.error('Administrator creation failed. Check MongoDB and your settings.');
+  else console.error(`Administrator creation failed (${error.name}${error.code ? `, code ${error.code}` : ''}). Check that check:database succeeds, then verify the admin settings in server/.env.`);
   process.exitCode = 1;
 }).finally(async () => {
   delete process.env.ADMIN_PASSWORD;

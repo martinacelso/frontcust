@@ -154,7 +154,7 @@ export default function AdminProfile({ onClose }) {
               <div className="profile-card-header">
                 <h3>Change password</h3>
                 <p className="acc-muted acc-small">
-                  Use at least 8 characters (maximum 72 UTF-8 bytes). You'll stay signed in after changing it.
+                  Use at least 8 characters.
                 </p>
               </div>
 

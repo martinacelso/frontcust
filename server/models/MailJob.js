@@ -5,6 +5,7 @@ const schema = new mongoose.Schema({
   to: { type: String, required: true }, subject: String, text: String,
   status: { type: String, enum: ['preview', 'pending', 'sending', 'sent', 'failed', 'cancelled'], default: 'preview' },
   attempts: { type: Number, default: 0 }, lastError: String, lockedAt: Date, sentAt: Date,
+  guestArchivedAt: Date,
 }, { timestamps: true });
 schema.index({ status: 1, createdAt: 1 });
 module.exports = mongoose.model('MailJob', schema);

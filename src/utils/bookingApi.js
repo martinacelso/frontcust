@@ -1,4 +1,4 @@
-export async function bookingRequest(path, body) {
+export async function bookingRequest(path, body, method = 'POST') {
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), 20000)
     try {
@@ -8,7 +8,7 @@ export async function bookingRequest(path, body) {
             if (!response.ok) return { error: 'Please sign in again.', status: response.status }
             const token = await response.json()
             if (!token.csrfToken) return { error: 'Unable to verify your session.' }
-            options.method = 'POST'
+            options.method = method
             options.headers = { 'Content-Type': 'application/json', 'X-CSRF-Token': token.csrfToken }
             options.body = JSON.stringify(body)
         }
@@ -23,9 +23,11 @@ export async function bookingRequest(path, body) {
 export function accountBooking(b) {
     return {
         id: b.id, type: b.type, in: b.checkIn, out: b.checkOut, g: b.adults + b.children,
+        adults: b.adults, children: b.children, requests: b.requests,
         st: b.status, note: b.requests, total: b.totalCents / 100, roomCharge: b.totalCents / 100,
         paid: b.paidCents / 100, deposit: b.depositCents / 100, holdUntil: b.holdUntil,
-        version: b.version, simulation: b.simulatedPayment, settlement: b.simulatedSettlement, refund: b.simulatedRefund, extras: [], disc: 0, refunded: (b.refundedCents || 0) / 100
+        version: b.version, simulation: b.simulatedPayment, settlement: b.simulatedSettlement, refund: b.simulatedRefund,
+        extras: [], disc: 0, refunded: (b.refundedCents || 0) / 100, archived: b.archived
     }
 }
 export const bookingStatus = (b, now = Date.now()) => b.st === 'pending-payment' && Date.parse(b.holdUntil) <= now ? 'expired' : b.st

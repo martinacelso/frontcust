@@ -1,9 +1,12 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
-const { randomBytes, timingSafeEqual } = require('node:crypto');
+const { createHash, randomBytes, timingSafeEqual } = require('node:crypto');
 const { rateLimit } = require('express-rate-limit');
 const User = require('../models/User');
+const PasswordResetToken = require('../models/PasswordResetToken');
 const { authenticated, requireRoles } = require('../middleware/auth');
+const { transaction, failure } = require('../utils/transaction');
+const passwordResetMail = require('../utils/passwordResetMail');
 
 const router = express.Router();
 const safeUser = (u) => ({
@@ -39,8 +42,8 @@ router.use((req, res, next) => {
   next();
 });
 
-const limit = () => rateLimit({
-  windowMs: 15 * 60 * 1000, limit: 20,
+const limit = (max = 20) => rateLimit({
+  windowMs: 15 * 60 * 1000, limit: max,
   standardHeaders: 'draft-8', legacyHeaders: false,
   message: { error: 'Too many attempts. Please try again in 15 minutes.' },
 });
@@ -56,7 +59,7 @@ function credentials(body) {
 
 router.post('/signup', limit(), async (req, res) => {
   const login = credentials(req.body);
-  if (!login) return res.status(400).json({ error: 'Enter a valid email and a password of at least 8 characters (maximum 72 UTF-8 bytes).' });
+  if (!login) return res.status(400).json({ error: 'Password must be at least 8 characters.' });
   if (typeof req.body.name !== 'string') return res.status(400).json({ error: 'Enter your full name.' });
   const name = req.body.name.trim();
   if (name.length < 2 || name.length > 100) return res.status(400).json({ error: 'Name must contain 2 to 100 characters.' });
@@ -93,6 +96,62 @@ router.post('/login', limit(), async (req, res) => {
 const validEmail = (s) => typeof s === 'string' && s.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s);
 const validPassword = (s) => typeof s === 'string' && s.length >= 8 && Buffer.byteLength(s, 'utf8') <= 72;
 
+router.post('/password-reset/request', limit(5), async (req, res) => {
+  const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : '';
+  if (!validEmail(email)) return res.status(400).json({ error: 'Enter a valid email address.' });
+  try {
+    passwordResetMail.config();
+  } catch (error) {
+    return res.status(error.status || 503).json({ error: error.message });
+  }
+
+  const user = await User.findOne({ email, active: true }).select('_id name email');
+  if (user) {
+    const token = randomBytes(32).toString('hex');
+    const tokenHash = createHash('sha256').update(token).digest('hex');
+    await PasswordResetToken.updateOne(
+      { userId: user._id },
+      { $set: { tokenHash, expiresAt: new Date(Date.now() + 30 * 60 * 1000) } },
+      { upsert: true, runValidators: true }
+    );
+    try {
+      await passwordResetMail.sendPasswordReset({ email: user.email, name: user.name, token });
+    } catch (error) {
+      console.error('Password reset email delivery failed:', error.code || error.name);
+      try {
+        await PasswordResetToken.deleteOne({ userId: user._id, tokenHash });
+      } catch (cleanupError) {
+        console.error('Unable to remove undelivered password reset token:', cleanupError.code || cleanupError.name);
+      }
+    }
+  }
+  res.status(202).json({
+    message: 'If an active account uses that email, a reset link will arrive shortly. Check your spam folder or contact the administrator if it does not.',
+  });
+});
+
+router.post('/password-reset/complete', limit(5), async (req, res) => {
+  const { token, password } = req.body || {};
+  if (typeof token !== 'string' || !/^[a-f\d]{64}$/i.test(token) || !validPassword(password)) {
+    return res.status(400).json({ error: 'Use a valid reset link and a password of at least 8 characters (72 UTF-8 bytes maximum).' });
+  }
+  const tokenHash = createHash('sha256').update(token).digest('hex');
+  const passwordHash = await bcrypt.hash(password, 12);
+  await transaction(async (session) => {
+    const reset = await PasswordResetToken.findOneAndDelete({
+      tokenHash, expiresAt: { $gt: new Date() },
+    }).session(session);
+    if (!reset) throw failure(400, 'This password reset link is invalid, expired, or already used. Request a new link.');
+    const user = await User.findOneAndUpdate(
+      { _id: reset.userId, active: true },
+      { $set: { passwordHash }, $inc: { sessionVersion: 1 } },
+      { session, new: true, runValidators: true }
+    );
+    if (!user) throw failure(400, 'This password reset link is invalid, expired, or already used. Request a new link.');
+  });
+  res.json({ message: 'Password reset successfully. Sign in with your new password.' });
+});
+
 router.post('/profile', limit(), authenticated, async (req, res) => {
   const b = req.body || {};
   if (typeof b.name !== 'string' || b.name.trim().length < 2 || b.name.trim().length > 100) return res.status(400).json({ error: 'Name must contain 2 to 100 characters.' });
@@ -115,6 +174,7 @@ router.post('/profile', limit(), authenticated, async (req, res) => {
       { new: true, runValidators: true }
     );
     if (!user) return res.status(409).json({ error: 'Your account changed. Refresh and try again.' });
+    if (email !== original.email) await PasswordResetToken.deleteOne({ userId: original._id });
     res.json({ message: 'Profile updated.', user: safeUser(user) });
   } catch (error) {
     if (error.code === 11000) return res.status(409).json({ error: 'An account with this email already exists.' });
@@ -133,6 +193,7 @@ router.post('/password', limit(), authenticated, async (req, res) => {
     { new: true, runValidators: true }
   );
   if (!user) return res.status(409).json({ error: 'Your account changed. Sign in again and retry.' });
+  await PasswordResetToken.deleteOne({ userId: user._id });
   // Existing sessions become invalid; retain this session with a fresh identifier.
   try {
     await sessionAction(req, 'regenerate');
@@ -161,4 +222,3 @@ router.get('/staff/me', authenticated, requireRoles('admin', 'front-desk', 'hous
 });
 
 module.exports = router;
-

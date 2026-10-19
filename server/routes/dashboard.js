@@ -10,7 +10,10 @@ router.get('/', async (req, res) => {
   res.set('Cache-Control', 'no-store');
   const now = new Date(), date = today(now);
   const day = (offset) => new Date(Date.parse(date + 'T00:00:00Z') + offset * 86400000).toISOString().slice(0, 10);
-  const groups = await Room.aggregate([{ $group: { _id: '$status', count: { $sum: 1 } } }]);
+  const groups = await Room.aggregate([
+    { $match: { archivedAt: null } },
+    { $group: { _id: '$status', count: { $sum: 1 } } },
+  ]);
   const counts = Object.fromEntries(groups.map((g) => [g._id, g.count]));
   const rooms = { total: groups.reduce((n, g) => n + g.count, 0), clean: counts.available || 0,
     occupied: counts.occupied || 0, dirty: counts.dirty || 0, maintenance: counts.maintenance || 0 };
@@ -18,7 +21,7 @@ router.get('/', async (req, res) => {
   if (req.account.role === 'housekeeping') return res.json({ date, updatedAt: now, rooms });
   const blocked = await Booking.distinct('room', { ...activeFilter(now), checkIn: { $lt: day(1) }, checkOut: { $gt: date } });
   const [availableTonight, arrivals, departures, overdue, bookings, payments] = await Promise.all([
-    Room.countDocuments({ status: 'available', _id: { $nin: blocked } }),
+    Room.countDocuments({ status: 'available', archivedAt: null, _id: { $nin: blocked } }),
     Booking.countDocuments({ status: 'confirmed', checkIn: date }),
     Booking.countDocuments({ status: 'checked-in', checkOut: date }),
     Booking.countDocuments({ status: 'checked-in', checkOut: { $lt: date } }),

@@ -1,5 +1,4 @@
 import WalkIn from './WalkIn'
-import { paymentDetailsError, paymentDetailsPayload } from '../../utils/paymentDetails'
 import PaymentMethod from '../account/PaymentMethod'
 import { useEffect, useRef, useState } from 'react'
 import { useAdmin } from '../../context/AdminContext'
@@ -25,7 +24,6 @@ function Desk() {
   const [message, setMessage] = useState('')
   const [selected, setSelected] = useState(null)
   const [simulate, setSimulate] = useState(false)
-  const [details, setDetails] = useState({})
   const [method, setMethod] = useState('GCash')
   const [enabled, setEnabled] = useState(false)
   const lock = useRef(false)
@@ -45,11 +43,10 @@ function Desk() {
   }, [status, page, reload])
   async function submit() {
     if (lock.current || !selected) return
-    if (selected.status === 'checked-in' && selected.totalCents > selected.paidCents) { const problem = paymentDetailsError(method, details); if (problem) { setActionError(problem); return } }
     lock.current = true; setBusy(true); setActionError('')
     try {
       const checkout = selected.status === 'checked-in'
-      const result = await bookingRequest(`/bookings/${selected.id}/${checkout ? 'check-out' : 'check-in'}`, { version: selected.version, simulateBalance: simulate, method, paymentDetails: paymentDetailsPayload(method, details) })
+      const result = await bookingRequest(`/bookings/${selected.id}/${checkout ? 'check-out' : 'check-in'}`, { version: selected.version, simulateBalance: simulate, method })
       if (!alive.current) return
       if (result.error) setActionError(result.error + ' Close and refresh before retrying.')
       else {
@@ -75,7 +72,7 @@ function Desk() {
     <div className="admin-table-wrap"><table className="admin-table"><thead><tr><th>Guest</th><th>Room</th><th>Dates</th><th>Balance</th><th>Action</th></tr></thead>
       <tbody>{rows.map((b) => <tr key={b.id}><td>{b.guest?.name || 'Guest unavailable'}</td><td>{b.roomNumber} · {b.type}</td>
         <td>{b.checkIn} to {b.checkOut}</td><td>{money(Math.max(0, b.totalCents - b.paidCents))}</td>
-        <td>{status !== 'checked-out' ? <button className="admin-link" disabled={!!selected || loading} onClick={() => { setSelected(b); setDetails({}); setMethod('GCash'); setSimulate(false); setActionError(''); setMessage('') }}>{status === 'confirmed' ? 'Check in' : 'Check out'}</button> : b.simulatedSettlement ? `Payment reference: ${b.simulatedSettlement.reference}` : 'Completed'}</td></tr>)}
+        <td>{status !== 'checked-out' ? <button className="admin-link" disabled={!!selected || loading} onClick={() => { setSelected(b); setMethod('GCash'); setSimulate(false); setActionError(''); setMessage('') }}>{status === 'confirmed' ? 'Check in' : 'Check out'}</button> : b.simulatedSettlement ? `Payment reference: ${b.simulatedSettlement.reference}` : 'Completed'}</td></tr>)}
         {!rows.length && <tr><td colSpan="5">{loading ? 'Loading…' : error ? 'Records unavailable.' : 'No reservations in this view.'}</td></tr>}</tbody></table></div>
     <div className="admin-row" style={{ gap: 12, marginTop: 16 }}>
       <button className="admin-btn" disabled={loading || !!selected || page === 1} onClick={() => setPage((n) => n - 1)}>Previous</button>
@@ -87,8 +84,10 @@ function Desk() {
       <p>{checkout ? 'The room will be marked dirty for cleaning. Early departure keeps the full booked price.' : 'The assigned room will be marked occupied. Check-in is allowed during the booked stay, before departure day.'}</p>
       {checkout && balance > 0 && <>
         <p>Outstanding balance: {money(balance)}. No real money will be collected.</p>
-        <PaymentMethod details={details} onDetailsChange={(value) => { setDetails(value); setSimulate(false); setActionError('') }} value={method} onChange={(value) => { setMethod(value); setDetails({}); setSimulate(false); setActionError('') }} disabled={busy} />
-        {enabled ? <label><input type="checkbox" checked={simulate} disabled={busy} onChange={(e) => setSimulate(e.target.checked)} /> I confirm this balance payment using the selected method.</label> : <p>Payments are currently unavailable. Settle outstanding balances before checkout.</p>}
+        {enabled ? <>
+          <PaymentMethod name="checkout-demo-payment-method" value={method} onChange={(value) => { setMethod(value); setSimulate(false); setActionError('') }} disabled={busy} />
+          <label><input type="checkbox" checked={simulate} disabled={busy} onChange={(e) => setSimulate(e.target.checked)} /> I confirm this demo balance payment using the selected method.</label>
+        </> : <p>Demo payments are disabled. Set DEMO_PAYMENTS=true in server/.env to enable simulated checkout.</p>}
       </>}
       {actionError && <p role="alert" className="acc-error">{actionError}</p>}
       <div style={{ marginTop: 12 }}><button className="admin-btn" disabled={busy || !!actionError || (checkout && balance > 0 && (!enabled || !simulate))} onClick={submit}>{busy ? 'Saving…' : 'Confirm'}</button>{' '}

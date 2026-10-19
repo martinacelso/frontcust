@@ -7,18 +7,20 @@ export default function GuestInbox() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [opened, setOpened] = useState(null)
+  const [showArchived, setShowArchived] = useState(false)
+  const [actionBusy, setActionBusy] = useState('')
   const generation = useRef(0)
   const refresh = useCallback(async () => {
     const ticket = ++generation.current
     setBusy(true)
     setError('')
-    const result = await bookingRequest('/inbox?page=' + page)
+    const result = await bookingRequest(`/inbox?page=${page}&includeArchived=${showArchived}`)
     if (ticket !== generation.current) return
     if (result.error) setError(result.error)
     else if (!Array.isArray(result.messages)) setError('Inbox returned an invalid response. Try refreshing.')
     else setData(result)
     setBusy(false)
-  }, [page])
+  }, [page, showArchived])
   useEffect(() => {
     setOpened(null)
     setData({ messages: [], hasMore: false })
@@ -27,19 +29,33 @@ export default function GuestInbox() {
     return () => { generation.current++; clearInterval(timer) }
   }, [refresh])
   const date = (value) => new Date(value).toLocaleString('en-PH', { timeZone: 'Asia/Manila' })
+  async function archive(message) {
+    setActionBusy(message.id); setError('')
+    const result = message.archived
+      ? await bookingRequest(`/inbox/${message.id}/restore`, {})
+      : await bookingRequest(`/inbox/${message.id}`, {}, 'DELETE')
+    setActionBusy('')
+    if (result.error) setError(result.error)
+    else await refresh()
+  }
   return <section className="acc-card profile-card" aria-labelledby="guest-inbox-title">
     <div className="profile-card-header">
       <h3 id="guest-inbox-title">Booking inbox</h3>
       <p className="acc-muted acc-small">Your booking confirmations, cancellation notices and checkout receipts appear here. These messages stay inside your profile.</p>
     </div>
     <button type="button" className="btn ghost-dark" disabled={busy} onClick={refresh}>{busy ? 'Loading…' : 'Refresh inbox'}</button>
+    <label style={{ marginLeft: 12 }}><input type="checkbox" checked={showArchived} disabled={busy || !!actionBusy}
+      onChange={(event) => { setPage(1); setShowArchived(event.target.checked) }} /> Show archived messages</label>
     {error && <p className="acc-error" role="alert">{error}</p>}
     {!busy && !error && !data.messages.length && <p>No messages yet. A confirmation appears after your booking deposit succeeds.</p>}
     <div style={{ display: 'grid', gap: 12, marginTop: 16 }}>
       {data.messages.map((message) => <article key={message.id} style={{ border: '1px solid #dfd2c6', borderRadius: 8, padding: 16 }}>
         <button type="button" className="admin-link" style={{ textAlign: 'left' }} aria-expanded={opened === message.id}
           aria-controls={'inbox-' + message.id} onClick={() => setOpened(opened === message.id ? null : message.id)}>
-          <strong>{message.subject}</strong>
+          <strong>{message.subject}{message.archived ? ' (archived)' : ''}</strong>
+        </button>
+        <button type="button" className="admin-link" disabled={busy || !!actionBusy} onClick={() => archive(message)}>
+          {actionBusy === message.id ? 'Saving…' : message.archived ? 'Restore' : 'Archive'}
         </button>
         <p className="acc-muted acc-small">From: Twin Lakes Reservations · {date(message.createdAt)} (Philippine time)</p>
         <div id={'inbox-' + message.id} hidden={opened !== message.id}>

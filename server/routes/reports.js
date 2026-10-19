@@ -34,7 +34,7 @@ router.get('/', async (req, res) => {
     ]),
     activity('checkedInAt'), activity('checkedOutAt'),
     Booking.distinct('guest', { ...arrival, status: { $in: ['confirmed', 'checked-in', 'checked-out'] } }),
-    Room.countDocuments({}),
+    Room.countDocuments({ archivedAt: null }),
     Booking.find({ checkedInAt: { $lt: range.end }, $or: [{ checkedOutAt: { $gte: range.start } }, { status: 'checked-in' }] }).select('room status checkedInAt checkedOutAt').lean(),
   ]);
   const inMap = new Map(ins.map((r) => [r._id, r.count])), outMap = new Map(outs.map((r) => [r._id, r.count]));

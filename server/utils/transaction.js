@@ -8,7 +8,7 @@ async function transaction(work) {
     });
   } catch (error) {
     if (error.code === 20 || error.codeName === 'IllegalOperation') {
-      throw failure(503, 'Booking changes require MongoDB replica-set transaction support. Ask the administrator to finish database setup.');
+      throw failure(503, 'This MongoDB deployment does not support transactions. Booking and room changes require MongoDB Atlas or another replica-set deployment. Check MONGODB_URI in server/.env and run npm run check:database from the server folder.');
     }
     throw error;
   } finally { await session.endSession(); }

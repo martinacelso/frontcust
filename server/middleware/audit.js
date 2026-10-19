@@ -1,7 +1,7 @@
 const Audit = require('../models/Audit');
 // Store request outcomes, never request bodies, passwords, cookies or payment details.
 module.exports = async function audit(req, res, next) {
-  if (!['POST', 'PATCH', 'DELETE'].includes(req.method) || !/^\/(auth|rooms|bookings|guests|staff|mail)(\/|$)/.test(req.path)) return next();
+  if (!['POST', 'PATCH', 'DELETE'].includes(req.method) || !/^\/(auth|rooms|bookings|guests|staff|mail|inbox)(\/|$)/.test(req.path)) return next();
   const safePath = req.path.replace(/[^a-zA-Z0-9/\-]/g, '').slice(0, 150);
   const actor = req.session?.userId;
   const event = await Audit.create({ action: req.method + ' ' + safePath,

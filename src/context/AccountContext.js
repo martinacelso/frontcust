@@ -34,14 +34,14 @@ function AccountState({ children, auth }) {
   const [now, setNow] = useState(Date.now())
   const lock = useRef(false), alive = useRef(false), revision = useRef(0)
   const guestId = user?.id
-  const refreshBookings = useCallback(async () => {
+  const refreshBookings = useCallback(async (includeArchived = false) => {
     if (!guestId || lock.current) return
     const ticket = ++revision.current
     setLoading(true); setError('')
     const list = []
     let page = 1, result
     do {
-      result = await bookingRequest('/bookings?page=' + page++)
+      result = await bookingRequest('/bookings?page=' + page++ + '&includeArchived=' + includeArchived)
       if (!alive.current || ticket !== revision.current) return
       if (result.error || !Array.isArray(result.bookings)) {
         setError(result.error || 'Unexpected booking response.'); setLoading(false); return
@@ -62,11 +62,11 @@ function AccountState({ children, auth }) {
     const timer = setInterval(() => setNow(Date.now()), 15000)
     return () => { current = false; alive.current = false; revision.current++; clearInterval(timer) }
   }, [refreshBookings])
-  async function mutation(path, body) {
+  async function mutation(path, body, method) {
     if (!user) return { error: 'Please sign in.' }
     if (lock.current) return { error: 'Please wait for the current request.' }
     lock.current = true; revision.current++; setBusy(true); setLoading(false); setError('')
-    const result = await bookingRequest(path, body)
+    const result = await bookingRequest(path, body, method)
     if (alive.current) {
       if (result.booking) {
         const row = accountBooking(result.booking)
@@ -95,10 +95,19 @@ function AccountState({ children, auth }) {
     myBookings: () => bookings, bookingLoading: loading, bookingError: error, bookingBusy: busy,
     demoEnabled, refreshBookings,
     addBooking: (data) => mutation('/bookings', data),
-    simulatePayment: (id, method, paymentDetails) => mutation('/bookings/' + id + '/simulate-payment', { method, paymentDetails }),
+    updateBooking: (id, data) => mutation('/bookings/' + id, data),
+    simulatePayment: (id, method) => mutation('/bookings/' + id + '/simulate-payment', { method }),
     cancelBooking: (id, confirmRefund = false) => {
       const row = rows.find((b) => b.id === id)
       return row ? mutation('/bookings/' + id + '/cancel', { version: row.version, confirmRefund }) : Promise.resolve({ error: 'Booking not found. Refresh and try again.' })
+    },
+    archiveBooking: (id) => {
+      const row = rows.find((b) => b.id === id)
+      return row ? mutation('/bookings/' + id, { version: row.version, confirm: true }, 'DELETE') : Promise.resolve({ error: 'Booking not found. Refresh and try again.' })
+    },
+    restoreBooking: (id) => {
+      const row = rows.find((b) => b.id === id)
+      return row ? mutation('/bookings/' + id + '/restore', { version: row.version }) : Promise.resolve({ error: 'Booking not found. Refresh and try again.' })
     }, sd, T, nights, P,
   }
   return <AccountContext.Provider value={value}>{children}</AccountContext.Provider>

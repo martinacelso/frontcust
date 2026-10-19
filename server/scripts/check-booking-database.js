@@ -1,6 +1,17 @@
 const path = require('node:path');
 require('dotenv').config({ path: path.join(__dirname, '..', '.env'), quiet: true });
 const mongoose = require('mongoose');
+function connectionHint(error) {
+  const code = error?.cause?.code || error?.code;
+  if (error.name === 'MongoParseError') return 'Check that MONGODB_URI is a complete Atlas connection string with all placeholders replaced.';
+  if (code === 18 || code === 8000 || error.codeName === 'AuthenticationFailed' || error.codeName === 'AtlasError') {
+    return 'Atlas rejected the connection. Check that the database user exists in Database Access, the username and password in server/.env match, and special characters in the password are URL-encoded. Also confirm your current IP is allowed in Network Access.';
+  }
+  if (code === 'ENOTFOUND' || code === 'EAI_AGAIN') return 'Check the Atlas hostname and your internet/DNS connection.';
+  if (code === 'ETIMEDOUT' || code === 'ECONNREFUSED') return 'Check Atlas Network Access and allow your current IP address.';
+  if (error.name === 'MongoServerSelectionError') return 'Check the Atlas URI, internet connection, cluster status, and Network Access IP allowlist.';
+  return 'Check the Atlas URI, database credentials, cluster status, and Network Access IP allowlist.';
+}
 async function check() {
   if (!process.env.MONGODB_URI) throw new Error('MONGODB_URI is missing.');
   await mongoose.connect(process.env.MONGODB_URI, { serverSelectionTimeoutMS: 5000 });
@@ -10,10 +21,15 @@ async function check() {
     console.log('Transaction-capable topology: YES');
     console.log('The booking backend can be installed. A live booking test is still required.');
   } else {
-    console.log('Transaction-capable topology: NO (standalone MongoDB)');
-    console.log('Keep the current server files for now. Configure a replica set before installing the booking backend.');
+    console.error('Transaction-capable topology: NO (standalone MongoDB)');
+    console.error('Booking and room changes require MongoDB Atlas or another replica-set deployment. Check MONGODB_URI in server/.env.');
+    process.exitCode = 1;
   }
   console.log('No records or database settings were changed.');
 }
-check().catch(() => { console.error('Unable to check database. Check MongoDB and server/.env.'); process.exitCode = 1; })
+check().catch((error) => {
+  if (error.message === 'MONGODB_URI is missing.') console.error(error.message);
+  else console.error(`Unable to check database (${error.name}${error.code ? `, code ${error.code}` : ''}). ${connectionHint(error)}`);
+  process.exitCode = 1;
+})
   .finally(() => mongoose.disconnect());

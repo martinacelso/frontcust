@@ -8,6 +8,8 @@ const roomTypeSchema = new mongoose.Schema({
   description: { type: String, trim: true, maxlength: 1000, default: '' },
   image: { type: String, trim: true, maxlength: 300, default: '/room-1.jpg',
     match: /^\/(?!\/)[a-zA-Z0-9_./-]+\.(?:jpg|jpeg|png|webp|avif)$/ },
+  archivedAt: Date,
+  archivedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
 }, { timestamps: true });
 
 roomTypeSchema.index({ name: 1 }, { unique: true, collation: { locale: 'en', strength: 2 } });

@@ -6,6 +6,8 @@ const roomSchema = new mongoose.Schema({
   roomType: { type: mongoose.Schema.Types.ObjectId, ref: 'RoomType', required: true, index: true },
   status: { type: String, enum: ['available', 'occupied', 'dirty', 'maintenance'], default: 'dirty' },
   notes: { type: String, trim: true, maxlength: 500, default: '' },
+  archivedAt: Date,
+  archivedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
 }, { timestamps: true });
 
 module.exports = mongoose.model('Room', roomSchema);

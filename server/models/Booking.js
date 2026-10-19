@@ -24,6 +24,8 @@ const schema = new mongoose.Schema({
   requestId: { type: String, required: true },
   fingerprint: { type: String, required: true },
   cancelledAt: Date,
+  archivedAt: Date,
+  archivedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   refundedCents: { type: Number, default: 0, min: 0, validate: Number.isSafeInteger },
   simulatedRefund: {
     reference: String, method: String, originalReference: String,

@@ -1,4 +1,3 @@
-import { paymentDetailsError, paymentDetailsPayload } from '../../utils/paymentDetails'
 import PaymentMethod from './PaymentMethod'
 import { receiptText } from '../../utils/billing'
 import { useEffect, useRef, useState } from 'react'
@@ -14,7 +13,6 @@ function Dialog({ modal, onClose }) {
   const lock = useRef(false)
   const { user } = useAccount()
   const [method, setMethod] = useState('GCash')
-  const [details, setDetails] = useState({})
   const [approved, setApproved] = useState(false)
   useEffect(() => {
     const previous = document.body.style.overflow
@@ -26,10 +24,9 @@ function Dialog({ modal, onClose }) {
   async function confirm() {
     if (lock.current) return
     if (modal.type === 'simulate' && !approved) return
-    if (modal.type === 'simulate') { const problem = paymentDetailsError(method, details); if (problem) { setError(problem); return } }
     lock.current = true; setBusy(true); setError('')
     try {
-      const result = await modal.onConfirm(method, modal.type === 'simulate' ? paymentDetailsPayload(method, details) : undefined)
+      const result = await modal.onConfirm(method)
       if (result?.error) setError(result.error)
       else if (result !== false) onClose()
     } catch { setError('Unable to confirm the result. Check My bookings before starting another reservation.') }
@@ -52,12 +49,12 @@ function Dialog({ modal, onClose }) {
       {b?.settlement && <p>Balance payment: {P(b.settlement.amountCents / 100)} · {b.settlement.method || 'Payment'} · {b.settlement.reference}</p>}
       {b?.refund && <p role="status">Refund recorded: {P(b.refunded)} · {b.refund.method} · {b.refund.reference}. No real money moved.</p>}
       {modal.type === 'simulate' && <>
-        <PaymentMethod value={method} onChange={(value) => { setMethod(value); setDetails({}); setApproved(false) }} details={details} onDetailsChange={(value) => { setDetails(value); setApproved(false); setError('') }} disabled={busy} />
+        <PaymentMethod name="customer-demo-payment-method" value={method} onChange={(value) => { setMethod(value); setApproved(false) }} disabled={busy} />
         <p>Down payment: <b>{P(b.deposit)}</b> using <b>{method}</b>.</p>
-        <label><input type="checkbox" checked={approved} disabled={busy} onChange={(e) => setApproved(e.target.checked)} /> I confirm this amount and payment method.</label>
+        <label><input type="checkbox" checked={approved} disabled={busy} onChange={(e) => setApproved(e.target.checked)} /> I confirm this demo payment amount and method. No money will be charged.</label>
       </>}
-      {modal.type === 'cancel' && <p>This releases the reservation. Before check-in, any recorded deposit receives a full refund to its original method. Same-day guest cancellations require staff assistance.</p>}
-      {modal.type === 'cancel' && b.paid > b.refunded && <p>Refund amount: <b>{P(b.paid - b.refunded)}</b>. Refund recorded in your booking balance; no funds are transferred.</p>}
+      {modal.type === 'cancel' && <p>This releases the reservation. Before check-in, any recorded demo deposit is marked as fully refunded. Same-day guest cancellations require staff assistance.</p>}
+      {modal.type === 'cancel' && b.paid > b.refunded && <p>Demo refund amount: <b>{P(b.paid - b.refunded)}</b>. Refund recorded in your booking history; no funds are transferred.</p>}
       {b && ['receipt', 'confirmed'].includes(modal.type) && <button className="btn ghost-dark" onClick={() => {
         const text = receiptText({ id: b.id, guest: { name: user?.name }, roomNumber: 'Assigned at the front desk', type: b.type,
           checkIn: b.in, checkOut: b.out, status: b.st, totalCents: Math.round(b.total * 100), paidCents: Math.round(b.paid * 100),

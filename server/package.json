@@ -4,7 +4,11 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node index.js",
+    "test": "node --test",
+    "seed:rooms": "node scripts/seed-rooms.js",
+    "create-admin": "node scripts/create-admin.js",
+    "check:database": "node scripts/check-booking-database.js"
   },
   "keywords": [],
   "author": "",
@@ -17,6 +21,8 @@
     "express": "^5.3.0",
     "express-rate-limit": "^8.7.1",
     "express-session": "^1.19.0",
-    "mongoose": "^9.11.2"
+    "frontcust": "file:..",
+    "mongoose": "^9.11.2",
+    "nodemailer": "^10.1.7"
   }
 }

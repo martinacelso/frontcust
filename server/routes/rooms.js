@@ -11,13 +11,13 @@ const router = express.Router();
 const objectId = (v) => typeof v === 'string' && /^[a-f\d]{24}$/i.test(v);
 const versionOK = (v) => Number.isInteger(v) && v >= 0;
 const typeView = (t) => ({ id: String(t._id), name: t.name, rate: t.rate, capacity: t.capacity,
-  description: t.description, image: t.image, version: t.__v || 0 });
+  description: t.description, image: t.image, version: t.__v || 0, archived: Boolean(t.archivedAt) });
 const roomView = (r) => ({ id: String(r._id), number: r.number, roomTypeId: String(r.roomType),
-  status: r.status, notes: r.notes, version: r.__v || 0 });
+  status: r.status, notes: r.notes, version: r.__v || 0, archived: Boolean(r.archivedAt) });
 
 // This is a room catalog, NOT date-based booking availability.
 router.get('/catalog', async (req, res) => {
-  const types = await RoomType.find().sort({ name: 1 });
+  const types = await RoomType.find({ archivedAt: null }).sort({ name: 1 });
   res.json({ types: types.map(typeView) });
 });
 
@@ -38,7 +38,13 @@ const writes = rateLimit({ windowMs: 60000, limit: 60, standardHeaders: 'draft-8
   message: { error: 'Too many changes. Wait a minute and try again.' } });
 
 router.get('/', async (req, res) => {
-  const [types, rooms] = await Promise.all([RoomType.find().sort({ name: 1 }), Room.find().sort({ number: 1 })]);
+  const includeArchived = req.account.role === 'admin' && req.query.includeArchived === 'true';
+  const typeFilter = includeArchived ? {} : { archivedAt: null };
+  const roomFilter = includeArchived ? {} : { archivedAt: null };
+  const [types, rooms] = await Promise.all([
+    RoomType.find(typeFilter).sort({ name: 1 }),
+    Room.find(roomFilter).sort({ number: 1 }),
+  ]);
   res.json({ types: types.map(typeView), rooms: rooms.map(roomView) });
 });
 
@@ -54,7 +60,10 @@ router.get('/availability', requireRoles('admin', 'front-desk'), async (req, res
     { status: 'checked-in' },
   ] });
   const ids = new Set(blocked.map(String));
-  const [types, rooms] = await Promise.all([RoomType.find().sort({ name: 1 }), Room.find().sort({ number: 1 })]);
+  const [types, rooms] = await Promise.all([
+    RoomType.find({ archivedAt: null }).sort({ name: 1 }),
+    Room.find({ archivedAt: null }).sort({ number: 1 }),
+  ]);
   const rows = rooms.map((r) => {
     const reason = r.status === 'occupied' ? 'Occupied' : r.status === 'maintenance' ? 'Maintenance' : ids.has(String(r._id)) ? 'Reserved for these dates' : '';
     return { ...roomView(r), available: !reason, ready: !reason && r.status === 'available',
@@ -87,20 +96,53 @@ router.post('/types', writes, requireRoles('admin'), async (req, res) => {
 router.patch('/types/:id', writes, requireRoles('admin'), async (req, res) => {
   const input = typeInput(req.body);
   if (!objectId(req.params.id) || !input || !versionOK(req.body.version)) return res.status(400).json({ error: 'Invalid room type details or version.' });
-  // Type identity/capacity changes need reservation-aware checks in the next phase.
-  const original = await RoomType.findById(req.params.id);
-  if (!original) return res.status(404).json({ error: 'Room type not found.' });
-  if (input.name !== original.name || input.capacity !== original.capacity) return res.status(409).json({ error: 'Changing existing type names or capacities is unavailable until reservation checks are connected.' });
-  const type = await RoomType.findOneAndUpdate({ _id: original._id, __v: req.body.version },
-    { $set: input, $inc: { __v: 1 } }, { new: true, runValidators: true });
-  if (!type) return res.status(409).json({ error: 'This room type changed. Refresh and try again.' });
+  const type = await transaction(async (session) => {
+    const original = await RoomType.findOneAndUpdate({ _id: req.params.id, __v: req.body.version, archivedAt: null },
+      { $inc: { __v: 1 } }, { session, returnDocument: 'before' });
+    if (!original) throw failure(409, 'Room type changed or is unavailable. Refresh and try again.');
+    if (input.capacity !== original.capacity) {
+      const bookings = await Booking.find({ roomType: original._id, ...activeFilter(), checkOut: { $gt: today() } })
+        .select('adults children').session(session).lean();
+      if (bookings.some((booking) => booking.adults + booking.children > input.capacity)) {
+        throw failure(409, 'Capacity cannot be reduced below the guest count on an active reservation.');
+      }
+    }
+    return RoomType.findOneAndUpdate({ _id: original._id }, { $set: input },
+      { session, returnDocument: 'after', runValidators: true });
+  });
+  res.json({ type: typeView(type) });
+});
+
+router.delete('/types/:id', writes, requireRoles('admin'), async (req, res) => {
+  if (!objectId(req.params.id) || !versionOK(req.body?.version) || req.body?.confirm !== true) {
+    throw failure(400, 'Confirm room type archival and refresh its version.');
+  }
+  const type = await transaction(async (session) => {
+    const original = await RoomType.findOneAndUpdate({ _id: req.params.id, __v: req.body.version, archivedAt: null },
+      { $inc: { __v: 1 } }, { session, returnDocument: 'before' });
+    if (!original) throw failure(409, 'Room type changed or is already archived. Refresh and try again.');
+    const activeRooms = await Room.exists({ roomType: original._id, archivedAt: null }).session(session);
+    const activeBookings = await Booking.exists({ roomType: original._id, ...activeFilter(), checkOut: { $gt: today() } }).session(session);
+    if (activeRooms || activeBookings) throw failure(409, "Archive or resolve this type's active rooms and reservations first.");
+    return RoomType.findOneAndUpdate({ _id: original._id }, {
+      $set: { archivedAt: new Date(), archivedBy: req.account._id },
+    }, { session, returnDocument: 'after' });
+  });
+  res.json({ type: typeView(type) });
+});
+
+router.post('/types/:id/restore', writes, requireRoles('admin'), async (req, res) => {
+  if (!objectId(req.params.id) || !versionOK(req.body?.version)) throw failure(400, 'Invalid room type or version.');
+  const type = await RoomType.findOneAndUpdate({ _id: req.params.id, __v: req.body.version, archivedAt: { $ne: null } },
+    { $unset: { archivedAt: 1, archivedBy: 1 }, $inc: { __v: 1 } }, { returnDocument: 'after', runValidators: true });
+  if (!type) throw failure(409, 'Room type changed or is already active. Refresh and try again.');
   res.json({ type: typeView(type) });
 });
 
 router.post('/', writes, requireRoles('admin'), async (req, res) => {
   const input = roomInput(req.body);
   if (!input) return res.status(400).json({ error: 'Check the room number, type and notes.' });
-  if (!(await RoomType.exists({ _id: input.roomType }))) return res.status(400).json({ error: 'Choose an existing room type.' });
+  if (!(await RoomType.exists({ _id: input.roomType, archivedAt: null }))) return res.status(400).json({ error: 'Choose an active room type.' });
   const room = await Room.create({ ...input, status: 'dirty' });
   res.status(201).json({ room: roomView(room) });
 });
@@ -110,10 +152,10 @@ router.patch('/:id', writes, requireRoles('admin'), async (req, res) => {
   if (!objectId(req.params.id) || !input || !versionOK(req.body.version)) return res.status(400).json({ error: 'Invalid room details or version.' });
   const room = await transaction(async (session) => {
     // This write serializes room edits with online bookings, walk-ins and check-in.
-    const original = await Room.findOneAndUpdate({ _id: req.params.id, __v: req.body.version, status: { $ne: 'occupied' } },
+    const original = await Room.findOneAndUpdate({ _id: req.params.id, __v: req.body.version, status: { $ne: 'occupied' }, archivedAt: null },
       { $inc: { __v: 1 } }, { session, returnDocument: 'before' });
     if (!original) throw failure(409, 'Room unavailable, occupied, or changed. Refresh and try again.');
-    if (!(await RoomType.exists({ _id: input.roomType }).session(session))) throw failure(400, 'Choose an existing room type.');
+    if (!(await RoomType.exists({ _id: input.roomType, archivedAt: null }).session(session))) throw failure(400, 'Choose an active room type.');
     if (String(original.roomType) !== input.roomType || original.number !== input.number) {
       const reserved = await Booking.exists({ room: original._id, ...activeFilter() }).session(session);
       if (reserved) throw failure(409, 'This room has an active booking or payment hold. Resolve it before changing its number or type.');
@@ -128,7 +170,7 @@ router.patch('/:id/status', writes, requireRoles('admin', 'housekeeping'), async
   if (!objectId(req.params.id) || !versionOK(b.version) || !['available', 'dirty', 'maintenance'].includes(b.status)) return res.status(400).json({ error: 'Choose a valid housekeeping status and version.' });
   if (b.status === 'maintenance') {
     const room = await transaction(async (session) => {
-      const locked = await Room.findOneAndUpdate({ _id: req.params.id, __v: b.version, status: { $ne: 'occupied' } },
+      const locked = await Room.findOneAndUpdate({ _id: req.params.id, __v: b.version, status: { $ne: 'occupied' }, archivedAt: null },
         { $set: { status: 'maintenance' }, $inc: { __v: 1 } }, { session, new: true, runValidators: true });
       if (!locked) throw failure(409, 'Room unavailable, occupied, or changed. Refresh and try again.');
       const reserved = await Booking.exists({ room: locked._id, ...activeFilter(), checkOut: { $gt: today() } }).session(session);
@@ -137,23 +179,40 @@ router.patch('/:id/status', writes, requireRoles('admin', 'housekeeping'), async
     });
     return res.json({ room: roomView(room) });
   }
-  const room = await Room.findOneAndUpdate({ _id: req.params.id, __v: b.version, status: { $ne: 'occupied' } },
+  const room = await Room.findOneAndUpdate({ _id: req.params.id, __v: b.version, status: { $ne: 'occupied' }, archivedAt: null },
     { $set: { status: b.status }, $inc: { __v: 1 } }, { new: true, runValidators: true });
   if (!room) return res.status(409).json({ error: 'Room unavailable, occupied, or changed. Refresh and try again.' });
   res.json({ room: roomView(room) });
 });
 
-// Remove only unused rooms. Booking history keeps its original room reference.
 router.delete('/:id', writes, requireRoles('admin'), async (req, res) => {
-  if (!objectId(req.params.id) || !versionOK(req.body?.version) || req.body?.confirm !== true) throw failure(400, 'Confirm room removal and refresh its version.');
-  await transaction(async (session) => {
-    const room = await Room.findOneAndUpdate({ _id: req.params.id, __v: req.body.version, status: { $ne: 'occupied' } },
-      { $inc: { __v: 1 } }, { session, returnDocument: 'after' });
-    if (!room) throw failure(409, 'Room unavailable, occupied, or changed. Refresh and try again.');
-    if (await Booking.exists({ room: room._id }).session(session)) throw failure(409, 'This room has booking history and cannot be removed. Keep it for reservation records.');
-    await Room.deleteOne({ _id: room._id }, { session });
+  if (!objectId(req.params.id) || !versionOK(req.body?.version) || req.body?.confirm !== true) throw failure(400, 'Confirm room archival and refresh its version.');
+  const room = await transaction(async (session) => {
+    const original = await Room.findOneAndUpdate({ _id: req.params.id, __v: req.body.version,
+      status: { $ne: 'occupied' }, archivedAt: null }, { $inc: { __v: 1 } }, { session, returnDocument: 'before' });
+    if (!original) throw failure(409, 'Room unavailable, occupied, already archived, or changed. Refresh and try again.');
+    const active = await Booking.exists({ room: original._id, ...activeFilter(), checkOut: { $gt: today() } }).session(session);
+    if (active) throw failure(409, "Resolve this room's active reservation or payment hold before archiving it.");
+    return Room.findOneAndUpdate({ _id: original._id }, { $set: {
+      archivedAt: new Date(), archivedBy: req.account._id,
+    } }, { session, returnDocument: 'after' });
   });
-  res.json({ removedId: req.params.id });
+  res.json({ room: roomView(room) });
+});
+
+router.post('/:id/restore', writes, requireRoles('admin'), async (req, res) => {
+  if (!objectId(req.params.id) || !versionOK(req.body?.version)) throw failure(400, 'Invalid room or version.');
+  const room = await transaction(async (session) => {
+    const original = await Room.findOne({ _id: req.params.id, __v: req.body.version, archivedAt: { $ne: null } }).session(session);
+    if (!original) throw failure(409, 'Room changed or is already active. Refresh and try again.');
+    if (!(await RoomType.exists({ _id: original.roomType, archivedAt: null }).session(session))) {
+      throw failure(409, 'Restore its room type before restoring this room.');
+    }
+    return Room.findOneAndUpdate({ _id: original._id, __v: req.body.version }, {
+      $unset: { archivedAt: 1, archivedBy: 1 }, $inc: { __v: 1 },
+    }, { session, returnDocument: 'after', runValidators: true });
+  });
+  res.json({ room: roomView(room) });
 });
 router.use((error, req, res, next) => {
   if (error.status) return res.status(error.status).json({ error: error.message });

@@ -10,10 +10,19 @@ export default function AuditModule() {
 function Audit() {
   const [tab, setTab] = useState('audit'), [form, setForm] = useState({ from: sd(-30), to: T(), q: '' })
   const [query, setQuery] = useState(form), [page, setPage] = useState(1), [revision, setRevision] = useState(0)
-  const [data, setData] = useState(null), [error, setError] = useState('')
+  const [data, setData] = useState(null), [error, setError] = useState(''), [showArchived, setShowArchived] = useState(false), [busyId, setBusyId] = useState('')
   // ---- filter ----
   // YYYY-MM-DD
-  useEffect(() => { let current = true; setData(null); setError(''); bookingRequest('/audit?' + new URLSearchParams({ ...query, page })).then((r) => { if (!current) return; if (r.error) setError(r.error); else setData(r) }); return () => { current = false } }, [query, page, revision])
+  useEffect(() => { let current = true; setData(null); setError(''); bookingRequest('/audit?' + new URLSearchParams({ ...query, page, includeArchived: showArchived })).then((r) => { if (!current) return; if (r.error) setError(r.error); else setData(r) }); return () => { current = false } }, [query, page, revision, showArchived])
+  async function archive(log) {
+    setBusyId(log.id); setError('')
+    const result = log.archived
+      ? await bookingRequest(`/audit/${log.id}/restore`, { version: log.version })
+      : await bookingRequest(`/audit/${log.id}`, { version: log.version, confirm: true }, 'DELETE')
+    setBusyId('')
+    if (result.error) setError(result.error)
+    else setRevision((n) => n + 1)
+  }
   // ---- CSV export ----
   function exportCSV() {
     const cell = (v) => { let s = String(v ?? ''); if (/^[=+@\-\t\r]/.test(s)) s = "'" + s; return '"' + s.replace(/"/g, '""') + '"' }
@@ -23,14 +32,16 @@ function Audit() {
   }
   return <><button className="admin-btn" onClick={() => setTab('audit')}>Audit log</button>{' '}<button className="admin-btn" onClick={() => setTab('mail')}>Booking emails</button>
     {tab === 'mail' ? <MailOutbox /> : <>
-      <p>Server request outcomes since installation. Accepted includes safe retries. Unknown means unfinished recording; verify the affected record.</p>
+      <p>Server request outcomes since installation. Entries cannot be edited; admins can archive them from the active view, and archive/restore actions are recorded. Unknown means unfinished recording; verify the affected record.</p>
       {/* ---- Filters ---- */}
       <form className="admin-row" style={{ gap: 12 }} onSubmit={(e) => { e.preventDefault(); setQuery({ ...form }); setPage(1); setRevision((n) => n + 1) }}>
         <label>From <input type="date" required value={form.from} onChange={(e) => setForm({ ...form, from: e.target.value })} /></label><label>To <input type="date" required value={form.to} onChange={(e) => setForm({ ...form, to: e.target.value })} /></label>
-        <label>Action <input maxLength={100} value={form.q} onChange={(e) => setForm({ ...form, q: e.target.value })} placeholder="bookings, staff, rooms…" /></label><button className="admin-btn">Search / refresh</button>
+        <label>Action <input maxLength={100} value={form.q} onChange={(e) => setForm({ ...form, q: e.target.value })} placeholder="bookings, staff, rooms…" /></label>
+        <label><input type="checkbox" checked={showArchived} onChange={(e) => { setShowArchived(e.target.checked); setPage(1) }} /> Show archived</label>
+        <button className="admin-btn">Search / refresh</button>
       </form>{error && <p role="alert">{error}</p>}
       {/* ---- Table ---- */}
-      <div className="admin-table-wrap"><table className="admin-table"><thead><tr><th>Time (PH)</th><th>Actor</th><th>Role</th><th>Action</th><th>Outcome</th></tr></thead><tbody>{data?.logs.map((l) => <tr key={l.id}><td>{new Date(l.at).toLocaleString('en-PH', { timeZone: 'Asia/Manila' })}</td><td>{l.actor}</td><td>{l.role}</td><td>{l.action}</td><td>{l.outcome} {l.statusCode}</td></tr>)}</tbody></table></div>
+      <div className="admin-table-wrap"><table className="admin-table"><thead><tr><th>Time (PH)</th><th>Actor</th><th>Role</th><th>Action</th><th>Outcome</th><th>Visibility</th></tr></thead><tbody>{data?.logs.map((l) => <tr key={l.id}><td>{new Date(l.at).toLocaleString('en-PH', { timeZone: 'Asia/Manila' })}</td><td>{l.actor}</td><td>{l.role}</td><td>{l.action}</td><td>{l.outcome} {l.statusCode}</td><td><button className="admin-link" disabled={!!busyId} onClick={() => archive(l)}>{busyId === l.id ? 'Saving…' : l.archived ? 'Restore' : 'Archive'}</button></td></tr>)}</tbody></table></div>
       {!data && !error && <p>Loading…</p>}{data?.logs.length === 0 && <p>No entries in this range.</p>}
       <button className="admin-btn" disabled={page === 1} onClick={() => setPage((n) => n - 1)}>Previous</button> Page {page} <button className="admin-btn" disabled={!data?.hasMore} onClick={() => setPage((n) => n + 1)}>Next</button>{' '}
       <button className="admin-btn" disabled={!data?.logs.length} onClick={exportCSV}>Export this page</button>

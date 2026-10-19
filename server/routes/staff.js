@@ -1,6 +1,7 @@
 const express = require('express'), bcrypt = require('bcryptjs');
 const { rateLimit } = require('express-rate-limit');
 const User = require('../models/User'), Lock = require('../models/AdminLock');
+const PasswordResetToken = require('../models/PasswordResetToken');
 const { authenticated, requireRoles } = require('../middleware/auth');
 const { transaction, failure } = require('../utils/transaction');
 const router = express.Router();
@@ -46,6 +47,7 @@ router.post('/save', async (req, res) => {
       const updated = await User.findOneAndUpdate({ _id: old._id, updatedAt: old.updatedAt },
         { $set: changes, $inc: { sessionVersion: 1 } }, { session, returnDocument: 'after', runValidators: true });
       if (!updated) throw failure(409, 'Account changed. Refresh before saving.');
+      await PasswordResetToken.deleteOne({ userId: old._id }, { session });
       return updated;
     });
     res.json({ staff: view(saved), message: 'Staff account saved. Existing sessions for edited accounts are invalidated.' });

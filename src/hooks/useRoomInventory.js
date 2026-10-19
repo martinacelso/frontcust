@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { roomRequest } from '../utils/roomApi'
 
 // This inventory is kept separate from the old browser-only reservations.
-export default function useRoomInventory() {
+export default function useRoomInventory(includeArchived = false) {
   const [data, setData] = useState({ types: [], rooms: [] })
   const [busy, setBusy] = useState(true)
   const [error, setError] = useState('')
@@ -18,14 +18,14 @@ export default function useRoomInventory() {
     setBusy(true)
     setError('')
     setMessage('')
-    const result = await roomRequest()
+    const result = await roomRequest(includeArchived ? '?includeArchived=true' : '')
     if (!alive.current || ticket !== generation.current) return
     if (result.error) setError(result.error)
     else if (!Array.isArray(result.types) || !Array.isArray(result.rooms)) setError('Invalid room data returned by the server.')
     else setData({ types: result.types, rooms: result.rooms })
     locked.current = false
     setBusy(false)
-  }, [])
+  }, [includeArchived])
 
   useEffect(() => {
     alive.current = true

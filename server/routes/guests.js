@@ -2,6 +2,7 @@ const express = require('express');
 const { timingSafeEqual } = require('node:crypto');
 const { rateLimit } = require('express-rate-limit');
 const User = require('../models/User');
+const PasswordResetToken = require('../models/PasswordResetToken');
 const Booking = require('../models/Booking');
 const { authenticated, requireRoles } = require('../middleware/auth');
 const router = express.Router();
@@ -36,10 +37,21 @@ router.get('/:id/bookings', async (req, res) => {
   })) });
 });
 const writes = rateLimit({ windowMs: 60000, limit: 20, standardHeaders: 'draft-8', legacyHeaders: false });
-router.post('/:id/contact', writes, async (req, res) => {
+function requireWrite(req, res) {
   const token = req.get('X-CSRF-Token'), expected = req.session.csrfToken;
-  if (!token || !expected || Buffer.byteLength(token) !== Buffer.byteLength(expected) || !timingSafeEqual(Buffer.from(token), Buffer.from(expected))) return res.status(403).json({ error: 'Refresh and try again.' });
-  if (!req.is('application/json')) return res.status(415).json({ error: 'Send JSON.' });
+  if (!token || !expected || Buffer.byteLength(token) !== Buffer.byteLength(expected) ||
+    !timingSafeEqual(Buffer.from(token), Buffer.from(expected))) {
+    res.status(403).json({ error: 'Refresh and try again.' });
+    return false;
+  }
+  if (!req.is('application/json')) {
+    res.status(415).json({ error: 'Send JSON.' });
+    return false;
+  }
+  return true;
+}
+router.post('/:id/contact', writes, async (req, res) => {
+  if (!requireWrite(req, res)) return;
   const b = req.body || {};
   if (!idOK(req.params.id) || typeof b.name !== 'string' || b.name.trim().length < 2 || b.name.trim().length > 100 ||
     typeof b.phone !== 'string' || (b.phone !== '' && !/^09\d{9}$/.test(b.phone)) ||
@@ -51,5 +63,31 @@ router.post('/:id/contact', writes, async (req, res) => {
     { returnDocument: 'after', runValidators: true }).select(fields).lean();
   if (!user) return res.status(409).json({ error: 'Guest changed or is unavailable. Close and reopen the profile before saving.' });
   res.json({ guest: view(user) });
+});
+
+router.delete('/:id', writes, async (req, res) => {
+  if (!requireWrite(req, res)) return;
+  const b = req.body || {};
+  if (!idOK(req.params.id) || typeof b.updatedAt !== 'string' || !Number.isFinite(Date.parse(b.updatedAt)) || b.confirm !== true) {
+    return res.status(400).json({ error: 'Confirm account deactivation and refresh the guest record.' });
+  }
+  const user = await User.findOneAndUpdate({ _id: req.params.id, role: 'guest', active: true, updatedAt: new Date(b.updatedAt) },
+    { $set: { active: false }, $inc: { sessionVersion: 1 } }, { returnDocument: 'after', runValidators: true }).select(fields).lean();
+  if (!user) return res.status(409).json({ error: 'Guest changed, is already inactive, or is unavailable. Refresh and try again.' });
+  await PasswordResetToken.deleteOne({ userId: user._id });
+  res.json({ guest: view(user), message: 'Guest account disabled. Booking history has been retained.' });
+});
+
+router.post('/:id/restore', writes, async (req, res) => {
+  if (!requireWrite(req, res)) return;
+  const b = req.body || {};
+  if (!idOK(req.params.id) || typeof b.updatedAt !== 'string' || !Number.isFinite(Date.parse(b.updatedAt))) {
+    return res.status(400).json({ error: 'Refresh the guest record before restoring it.' });
+  }
+  const user = await User.findOneAndUpdate({ _id: req.params.id, role: 'guest', active: false, updatedAt: new Date(b.updatedAt) },
+    { $set: { active: true }, $inc: { sessionVersion: 1 } }, { returnDocument: 'after', runValidators: true }).select(fields).lean();
+  if (!user) return res.status(409).json({ error: 'Guest changed or is already active. Refresh and try again.' });
+  await PasswordResetToken.deleteOne({ userId: user._id });
+  res.json({ guest: view(user), message: 'Guest account restored. Sign in again to start a new session.' });
 });
 module.exports = router;

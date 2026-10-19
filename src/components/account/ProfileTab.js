@@ -208,7 +208,7 @@ export default function ProfileTab() {
             <div className="profile-card-header">
               <h3>Change password</h3>
               <p className="acc-muted acc-small">
-                Use at least 8 characters (maximum 72 UTF-8 bytes). Avoid reusing passwords from other sites.
+                Use at least 8 characters
               </p>
             </div>
 

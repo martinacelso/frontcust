@@ -12,6 +12,7 @@ export default function ReservationsModule() {
 }
 
 function Reservations() {
+  const { sessionUser } = useAdmin()
   const [rows, setRows] = useState([])
   const [page, setPage] = useState(1)
   const [hasMore, setHasMore] = useState(false)
@@ -25,6 +26,7 @@ function Reservations() {
   const [selected, setSelected] = useState(null)
   const [confirm, setConfirm] = useState(false)
   const [actionError, setActionError] = useState('')
+  const [showArchived, setShowArchived] = useState(false)
   const locked = useRef(false)
   const alive = useRef(true)
   useEffect(() => { alive.current = true; return () => { alive.current = false } }, [])
@@ -32,14 +34,14 @@ function Reservations() {
   useEffect(() => {
     let current = true
     setLoading(true); setError(''); setRows([])
-    bookingRequest(`/bookings/staff-list?page=${page}&status=${encodeURIComponent(status)}`).then((result) => {
+    bookingRequest(`/bookings/staff-list?page=${page}&status=${encodeURIComponent(status)}&includeArchived=${showArchived}`).then((result) => {
       if (!current) return
       if (result.error) setError(result.error)
       else { setRows(result.bookings); setHasMore(result.hasMore) }
       setLoading(false)
     })
     return () => { current = false }
-  }, [page, status, reload])
+  }, [page, status, reload, showArchived])
 
   function open(row) { setSelected(row); setConfirm(false); setActionError(''); setMessage('') }
   async function cancel() {
@@ -56,6 +58,18 @@ function Reservations() {
       }
     } finally { locked.current = false; if (alive.current) setBusy(false) }
   }
+  async function archive(row) {
+    if (locked.current) return
+    if (!row.archived && !window.confirm('Archive this cancelled or expired booking? Its history will remain stored.')) return
+    locked.current = true; setBusy(true); setActionError('')
+    try {
+      const result = row.archived
+        ? await bookingRequest(`/bookings/${row.id}/restore`, { version: row.version })
+        : await bookingRequest(`/bookings/${row.id}`, { version: row.version, confirm: true }, 'DELETE')
+      if (result.error) setActionError(result.error)
+      else setReload((n) => n + 1)
+    } finally { locked.current = false; if (alive.current) setBusy(false) }
+  }
   const term = search.trim().toLowerCase()
   const visible = rows.filter((b) => [b.id, b.guest?.name, b.guest?.email, b.roomNumber, b.type].some((v) => String(v || '').toLowerCase().includes(term)))
   return <>
@@ -64,18 +78,23 @@ function Reservations() {
         <option value="">All statuses</option>{Object.entries(STATUS_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
       </select></label>
       <label>Search this page <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Guest, room or booking reference" /></label>
+      {sessionUser.role === 'admin' && <label><input type="checkbox" checked={showArchived} disabled={loading || !!selected}
+        onChange={(e) => { setPage(1); setShowArchived(e.target.checked) }} /> Show archived</label>}
       <button className="admin-btn" disabled={loading || !!selected} onClick={() => { setMessage(''); setReload((n) => n + 1) }}>Refresh</button>
     </div>
     <p>Saved reservations · 50 per page. Refresh to see new bookings and payment updates.</p>
     {error && <p className="acc-error" role="alert">{error}</p>}
+    {actionError && !selected && <p className="acc-error" role="alert">{actionError}</p>}
     {message && <p className="acc-saved" role="status">{message}</p>}
     <div className="admin-table-wrap"><table className="admin-table">
       <thead><tr><th>Guest</th><th>Room</th><th>Stay</th><th>Status</th><th>Total</th><th>Recorded payment</th><th>Action</th></tr></thead>
       <tbody>{visible.map((b) => <tr key={b.id}>
         <td>{b.guest?.name || 'Guest account unavailable'}</td><td>{b.roomNumber} · {b.type}</td>
-        <td>{b.checkIn} → {b.checkOut}</td><td>{STATUS_LABELS[b.status] || b.status}</td>
+        <td>{b.checkIn} → {b.checkOut}</td><td>{STATUS_LABELS[b.status] || b.status}{b.archived && ' (archived)'}</td>
         <td>{money(b.totalCents)}</td><td>{money(b.paidCents)}{b.simulatedPayment && ' (test payment)'}</td>
-        <td><button className="admin-link" disabled={!!selected || loading} onClick={() => open(b)}>Details</button></td>
+        <td><button className="admin-link" disabled={!!selected || loading} onClick={() => open(b)}>Details</button>{' '}
+          {b.archived && sessionUser.role === 'admin' && <button className="admin-link" disabled={busy || !!selected || loading} onClick={() => archive(b)}>Restore</button>}
+          {!b.archived && ['cancelled', 'expired'].includes(b.status) && <button className="admin-link" disabled={busy || !!selected || loading} onClick={() => archive(b)}>Archive</button>}</td>
       </tr>)}{!visible.length && <tr><td colSpan="7">{loading ? 'Loading reservations…' : error ? 'Reservations unavailable.' : 'No matching reservations on this page.'}</td></tr>}</tbody>
     </table></div>
     <div className="admin-row" style={{ gap: 12, marginTop: 16 }}>

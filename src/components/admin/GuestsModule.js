@@ -32,7 +32,7 @@ function Guests() {
     <p>Registered guest accounts. Guests create accounts through Sign up; staff can update their contact details here.</p>
     {error && <p role="alert" className="acc-error">{error}</p>}
     <div className="admin-table-wrap"><table className="admin-table"><thead><tr><th>Name</th><th>Contact email</th><th>Phone</th><th>Account</th><th>Action</th></tr></thead>
-      <tbody>{rows.map((g) => <tr key={g.id}><td>{g.name}</td><td>{g.contactEmail}</td><td>{formatDigits(g.phone) || 'Unavailable'}</td><td>{g.active ? 'Active' : 'Inactive'}</td><td><button className="admin-link" disabled={!!selected} onClick={() => setSelected(g.id)}>Profile and bookings</button></td></tr>)}
+      <tbody>{rows.map((g) => <tr key={g.id}><td>{g.name}</td><td>{g.contactEmail}</td><td>{formatDigits(g.phone) || 'Unavailable'}</td><td>{g.active ? 'Active' : 'Disabled'}</td><td><button className="admin-link" disabled={!!selected} onClick={() => setSelected(g.id)}>Profile and bookings</button></td></tr>)}
         {!rows.length && <tr><td colSpan="5">{busy ? 'Loading…' : error ? 'Guest records unavailable.' : 'No matching guests.'}</td></tr>}</tbody></table></div>
     <div className="admin-row" style={{ gap: 12, marginTop: 12 }}><button className="admin-btn" disabled={busy || !!selected || page === 1} onClick={() => setPage((p) => p - 1)}>Previous</button><span>Page {page}</span>
       <button className="admin-btn" disabled={busy || !!selected || !!error || !more} onClick={() => setPage((p) => p + 1)}>Next</button></div>
@@ -63,13 +63,30 @@ function Profile({ id, onClose }) {
       else { setForm(r.guest); setData((old) => ({ ...old, guest: r.guest })); setMessage('Guest contact details saved.') }
     } finally { lock.current = false; setSaving(false) }
   }
+  async function setActive(active) {
+    if (saving || !data?.guest) return
+    const action = active ? 'restore' : ''
+    if (!active && !window.confirm('Disable this guest account? It will no longer be able to sign in, but its booking history will be retained.')) return
+    setSaving(true); setError(''); setMessage('')
+    try {
+      const result = active
+        ? await bookingRequest(`/guests/${id}/${action}`, { updatedAt: data.guest.updatedAt })
+        : await bookingRequest(`/guests/${id}`, { updatedAt: data.guest.updatedAt, confirm: true }, 'DELETE')
+      if (result.error) setError(result.error)
+      else {
+        setData((old) => ({ ...old, guest: result.guest }))
+        setForm(result.guest)
+        setMessage(result.message)
+      }
+    } finally { setSaving(false) }
+  }
   const dirty = form && data && ['name', 'phone', 'contactEmail'].some((key) => form[key] !== data.guest[key])
   return <section style={{ border: '1px solid #ddd', borderRadius: 12, padding: 20, marginTop: 20 }}>
     <h3>Guest profile</h3>
     {loading && <p>Loading profile…</p>}{error && <p role="alert" className="acc-error">{error}</p>}{message && <p role="status" className="acc-saved">{message}</p>}
     {/* ---- Add/edit modal ---- */}
     {form && <form onSubmit={save}>
-      <p>Login email: {data.guest.email}</p>
+      <p>Login email: {data.guest.email} · Account: {data.guest.active ? 'Active' : 'Disabled'}</p>
       <div style={{ display: 'grid', gap: 12 }}>
         {['name', 'contactEmail', 'phone'].map((key) => <label key={key}>{({ name: 'Full name', contactEmail: 'Contact email', phone: 'Mobile number (optional)' })[key]}
           {key === 'phone' ? <DigitInput style={{ display: 'block' }} value={form.phone} disabled={saving} placeholder="0911 222 1233" onValueChange={(phone) => setForm((old) => ({ ...old, phone }))} /> : <input style={{ display: 'block' }} type={key === 'contactEmail' ? 'email' : key === 'phone' ? 'tel' : 'text'} required={key !== 'phone'} maxLength={key === 'phone' ? 11 : key === 'name' ? 100 : 254} value={form[key]} disabled={saving} onChange={(e) => setForm((old) => ({ ...old, [key]: e.target.value }))} />}
@@ -77,6 +94,8 @@ function Profile({ id, onClose }) {
       </div>
       <button className="admin-btn" style={{ marginTop: 12 }} disabled={saving || !dirty}>{saving ? 'Saving…' : 'Save contact details'}</button>
       {dirty && <button type="button" className="admin-btn" disabled={saving} onClick={() => setForm(data.guest)}>Discard edits</button>}
+      <button type="button" className="admin-btn" style={{ marginTop: 12 }} disabled={saving || dirty}
+        onClick={() => setActive(!data.guest.active)}>{data.guest.active ? 'Disable account' : 'Restore account'}</button>
     </form>}
     {data && <><h3>Booking history</h3><div className="admin-table-wrap"><table className="admin-table"><thead><tr><th>Reference</th><th>Room</th><th>Dates</th><th>Status</th><th>Payments</th><th>Refunds</th></tr></thead>
       <tbody>{data.bookings.map((b) => <tr key={b.id}><td>{b.id}</td><td>{b.roomNumber} · {b.type}</td><td>{b.checkIn} to {b.checkOut}</td><td>{STATUS_LABELS[b.status]}</td><td>{money(b.paidCents)}</td><td>{money(b.refundedCents)}</td></tr>)}

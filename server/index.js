@@ -15,6 +15,7 @@ const bookingRoutes = require('./routes/bookings');
 const Audit = require('./models/Audit');
 const AdminLock = require('./models/AdminLock');
 const MailJob = require('./models/MailJob');
+const PasswordResetToken = require('./models/PasswordResetToken');
 async function startServer() {
   if (!process.env.MONGODB_URI) throw new Error('Set MONGODB_URI in server/.env.');
   if (!process.env.SESSION_SECRET || process.env.SESSION_SECRET.length < 64) {
@@ -24,7 +25,7 @@ async function startServer() {
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Invalid PORT.');
 
   await mongoose.connect(process.env.MONGODB_URI, { serverSelectionTimeoutMS: 5000 });
-  await Promise.all([User.init(), RoomType.init(), Room.init(), Booking.init(), Audit.init(), AdminLock.init(), MailJob.init()]);
+  await Promise.all([User.init(), RoomType.init(), Room.init(), Booking.init(), Audit.init(), AdminLock.init(), MailJob.init(), PasswordResetToken.init()]);
   await AdminLock.updateOne({ _id: 'staff' }, { $setOnInsert: { revision: 0 } }, { upsert: true });
   console.log('MongoDB connected');
 
@@ -86,4 +87,3 @@ startServer().catch((error) => {
   console.error('Startup failed:', error.name, error.code || 'Check MongoDB and server/.env settings.');
   process.exit(1);
 });
-

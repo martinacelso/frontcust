@@ -20,7 +20,10 @@ import { Experience, Location, Footer } from './components/Sections'
 import AdminLayout from './components/admin/AdminLayout'
 
 function Shell() {
-  const [authOpen, setAuthOpen] = useState(false)
+  const [resetToken] = useState(() => new URLSearchParams(window.location.hash.slice(1)).get('resetToken') ||
+    new URLSearchParams(window.location.search).get('resetToken') || '')
+  const [authOpen, setAuthOpen] = useState(() => Boolean(new URLSearchParams(window.location.hash.slice(1)).get('resetToken') ||
+    new URLSearchParams(window.location.search).get('resetToken')))
   const [bookingIntent, setBookingIntent] = useState(() => {
     try {
       const saved = JSON.parse(sessionStorage.getItem('frontcust.booking-search') || 'null')
@@ -41,16 +44,16 @@ function Shell() {
   const openAuth = () => setAuthOpen(true)
   const closeAuth = () => setAuthOpen(false)
 
-  if (authLoading) return <main className="wrap" role="status">Loading your account…</main>
-  if (authError) return <main className="wrap" role="alert"><p>{authError}</p><button className="btn" onClick={() => window.location.reload()}>Try again</button></main>
+  if (authLoading && !resetToken) return <main className="wrap" role="status">Loading your account…</main>
+  if (authError && !resetToken) return <main className="wrap" role="alert"><p>{authError}</p><button className="btn" onClick={() => window.location.reload()}>Try again</button></main>
 
   // ---- Signed in as staff → admin interface ----
-  if (staffUser) {
+  if (staffUser && !resetToken) {
     return <AdminLayout />
   }
 
   // ---- Signed in as guest → account dashboard ----
-  if (guestUser) {
+  if (guestUser && !resetToken) {
     return <AccountPage bookingIntent={bookingIntent} clearBookingIntent={clearBookingIntent} />
   }
 
@@ -86,7 +89,7 @@ function Shell() {
       <Experience />
       <Location />
       <Footer />
-      <AuthModal isOpen={authOpen} onClose={closeAuth} />
+      <AuthModal isOpen={authOpen} onClose={closeAuth} resetToken={resetToken} />
     </AuthContext.Provider>
   )
 }
